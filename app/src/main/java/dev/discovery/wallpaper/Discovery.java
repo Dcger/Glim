@@ -7,6 +7,9 @@ import java.util.Map;
 final class Discovery {
     static final int DEFAULT_MINUTES = 30;
     static final int[] INTERVALS = {15, DEFAULT_MINUTES, 60, 120};
+    static final int MAX_TITLE_LENGTH = 42;
+    static final int MAX_BODY_LENGTH = 155;
+    static final int MAX_TASK_LENGTH = 70;
 
     static final class Topic {
         final String id;

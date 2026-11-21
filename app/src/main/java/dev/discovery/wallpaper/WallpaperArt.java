@@ -25,6 +25,7 @@ import android.util.DisplayMetrics;
 import android.util.Size;
 import android.view.Display;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -107,14 +108,16 @@ final class WallpaperArt {
         return y + text.getHeight();
     }
 
-    private static Bitmap readPhoto(Context context, String value, int width, int height) {
+    static Bitmap readPhoto(Context context, String value, int width, int height) {
         if (value.isEmpty()) return null;
         Uri uri = Uri.parse(value);
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inJustDecodeBounds = true;
         try {
             if (Build.VERSION.SDK_INT >= 28) {
-                ImageDecoder.Source source = ImageDecoder.createSource(context.getContentResolver(), uri);
+                ImageDecoder.Source source = "file".equals(uri.getScheme())
+                        ? ImageDecoder.createSource(new File(uri.getPath()))
+                        : ImageDecoder.createSource(context.getContentResolver(), uri);
                 return ImageDecoder.decodeBitmap(source, (decoder, info, input) -> {
                     Size original = info.getSize();
                     decoder.setTargetSampleSize(sampleSize(original.getWidth(), original.getHeight(), width, height));

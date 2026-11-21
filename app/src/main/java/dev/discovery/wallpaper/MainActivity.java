@@ -5,6 +5,8 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
@@ -28,6 +30,7 @@ import android.view.View;
 import android.view.WindowInsets;
 import android.widget.ArrayAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -38,9 +41,11 @@ import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -55,6 +60,7 @@ public final class MainActivity extends Activity {
     private static final int MUTED = 0xffb5c3b3;
     private static final int PICK_PHOTO = 1;
     private static final int PICK_AUDIO = 2;
+    private static final int PICK_IMPORT_ZIP = 4;
 
     private LinearLayout root;
     private LinearLayout content;
@@ -76,6 +82,11 @@ public final class MainActivity extends Activity {
     private TextView rotationStatus;
     private final ExecutorService previewWorker = Executors.newSingleThreadExecutor();
     private Future<?> previewTask;
+    private final ExecutorService importWorker = Executors.newSingleThreadExecutor();
+    private Future<?> zipRead;
+    private ImportTarget pendingZip;
+    private AlertDialog importEntry;
+    private CardZipImport.Bundle reviewedZip;
     private CardDraft draft;
     private MediaPlayer player;
     private final BroadcastReceiver rotationUpdates = new BroadcastReceiver() {
@@ -94,6 +105,8 @@ public final class MainActivity extends Activity {
         if (saved != null) {
             showTopics = saved.getBoolean("topics");
             previewId = saved.getString("preview", "");
+            String topicId = saved.getString("zipTopic");
+            if (topicId != null) pendingZip = new ImportTarget(topicId, saved.getString("zipSource", ""));
         }
         root = column();
         root.setBackgroundColor(BACKGROUND);
@@ -138,6 +151,10 @@ public final class MainActivity extends Activity {
     protected void onSaveInstanceState(Bundle out) {
         out.putBoolean("topics", showTopics);
         out.putString("preview", previewId);
+        if (pendingZip != null) {
+            out.putString("zipTopic", pendingZip.topicId());
+            out.putString("zipSource", pendingZip.sourceId());
+        }
         super.onSaveInstanceState(out);
     }
 
@@ -151,6 +168,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         previewWorker.shutdownNow();
+        if (zipRead != null) zipRead.cancel(true);
+        importWorker.shutdown();
+        if (reviewedZip != null) reviewedZip.close();
         super.onDestroy();
     }
 
@@ -410,6 +430,7 @@ public final class MainActivity extends Activity {
             top(box, actions, 10);
             equal(actions, button("资料与备注", () -> topicDetails(topic), false), 0);
             equal(actions, button("添加卡片", () -> addCard(topic), false), 8);
+            top(box, button("批量导入卡片", () -> importCards(topic), false), 8);
         }
         top(content, button("新建主题", this::newTopic, true), 14);
     }
@@ -482,19 +503,10 @@ public final class MainActivity extends Activity {
 
     private void addCard(Discovery.Topic topic) {
         LinearLayout fields = fields();
-        EditText title = field(fields, "卡片标题", "", 42, 1);
-        EditText body = field(fields, "观察或发现", "", 155, 4);
-        EditText task = field(fields, "可以马上做的小任务（可选）", "", 70, 2);
-        Spinner sources = new Spinner(this);
-        ArrayList<String> labels = new ArrayList<>();
-        labels.add("选择资料（可选）");
-        for (Discovery.Source source : topic.sources) labels.add(source.label);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item, labels);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        sources.setAdapter(adapter);
-        sources.setMinimumHeight(dp(48));
-        fields.addView(sources);
+        EditText title = field(fields, "卡片标题", "", Discovery.MAX_TITLE_LENGTH, 1);
+        EditText body = field(fields, "观察或发现", "", Discovery.MAX_BODY_LENGTH, 4);
+        EditText task = field(fields, "可以马上做的小任务（可选）", "", Discovery.MAX_TASK_LENGTH, 2);
+        Spinner sources = sourcePicker(fields, topic);
 
         CardDraft editing = new CardDraft();
         draft = editing;
@@ -521,8 +533,8 @@ public final class MainActivity extends Activity {
                 missing(body, "填写一条发现");
                 return;
             }
-            int index = sources.getSelectedItemPosition();
-            String sourceId = index <= 0 ? "" : topic.sources.get(index - 1).id;
+            Discovery.Source selected = selectedSource(sources, topic);
+            String sourceId = selected == null ? "" : selected.id;
             String id = uuid();
             Discovery.Card card = new Discovery.Card(id, topic.id, value(title), value(body), value(task),
                     sourceId, editing.photoUri, editing.audioUri, "forest");
@@ -533,6 +545,286 @@ public final class MainActivity extends Activity {
                 refresh(true);
             }
         });
+    }
+
+    private Spinner sourcePicker(LinearLayout fields, Discovery.Topic topic) {
+        Spinner sources = new Spinner(this);
+        ArrayList<String> labels = new ArrayList<>();
+        labels.add("选择资料（可选）");
+        for (Discovery.Source source : topic.sources) labels.add(source.label);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, labels);
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        sources.setAdapter(adapter);
+        sources.setMinimumHeight(dp(48));
+        fields.addView(sources);
+        return sources;
+    }
+
+    private Discovery.Source selectedSource(Spinner picker, Discovery.Topic topic) {
+        int index = picker.getSelectedItemPosition();
+        return index <= 0 ? null : topic.sources.get(index - 1);
+    }
+
+    private void importCards(Discovery.Topic topic) {
+        LinearLayout fields = fields();
+        Spinner sources = sourcePicker(fields, topic);
+        top(fields, button("复制给 Agent 的提示", () ->
+                copyImportPrompt(topic, selectedSource(sources, topic)), false), 8);
+        Button zip = button("选择 ZIP 文件", () -> pickImportZip(importTarget(topic, sources)), false);
+        top(fields, zip, 8);
+        EditText input = field(fields, "粘贴卡片 JSON", "", CardImport.MAX_INPUT_LENGTH + 1, 5);
+        input.setMaxLines(8);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        AlertDialog entry = dialog("批量导入 · " + topic.name, fields);
+        importEntry = entry;
+        entry.setOnDismissListener(ignored -> {
+            if (importEntry == entry) importEntry = null;
+        });
+        entry.setButton(AlertDialog.BUTTON_POSITIVE, "审阅卡片", (dialog, which) -> {});
+        entry.show();
+        entry.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            try {
+                List<CardImport.Draft> drafts = CardImport.parse(value(input), false);
+                List<CardImport.Draft> unique = CardImport.unique(state, topic.id, drafts);
+                if (unique.isEmpty()) {
+                    missing(input, "这些卡片已在本主题中。");
+                    return;
+                }
+                reviewImport(entry, importTarget(topic, sources), unique, drafts.size() - unique.size(), null);
+            } catch (IOException error) {
+                missing(input, error.getMessage());
+            }
+        });
+    }
+
+    private record ImportTarget(String topicId, String sourceId) {}
+
+    private ImportTarget importTarget(Discovery.Topic topic, Spinner sources) {
+        Discovery.Source source = selectedSource(sources, topic);
+        return new ImportTarget(topic.id, source == null ? "" : source.id);
+    }
+
+    private void pickImportZip(ImportTarget target) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
+                        "application/zip", "application/x-zip-compressed", "application/octet-stream"});
+        try {
+            pendingZip = target;
+            startActivityForResult(intent, PICK_IMPORT_ZIP);
+        } catch (ActivityNotFoundException error) {
+            pendingZip = null;
+            notice("系统文件选择器不可用");
+        }
+    }
+
+    private void loadImportZip(AlertDialog entry, ImportTarget target, Uri uri) {
+        AlertDialog loading = new AlertDialog.Builder(this)
+                .setMessage("正在读取 ZIP 和媒体文件…")
+                .setNegativeButton("取消", (dialog, which) -> dialog.cancel())
+                .show();
+        Context app = getApplicationContext();
+        Future<?> task = importWorker.submit(() -> {
+            try {
+                CardZipImport.Bundle bundle = CardZipImport.read(app, uri);
+                runOnUiThread(() -> {
+                    if (isDestroyed() || !loading.isShowing()) {
+                        bundle.close();
+                        return;
+                    }
+                    loading.dismiss();
+                    if (state == null || !state.topics.containsKey(target.topicId())) {
+                        bundle.close();
+                        notice("无法读取当前主题。");
+                        return;
+                    }
+                    List<CardImport.Draft> unique = CardImport.unique(state, target.topicId(), bundle.drafts);
+                    if (unique.isEmpty()) {
+                        bundle.close();
+                        notice("这些卡片已在本主题中");
+                        return;
+                    }
+                    reviewedZip = bundle;
+                    reviewImport(entry, target, unique, bundle.drafts.size() - unique.size(), bundle);
+                });
+            } catch (IOException | RuntimeException error) {
+                runOnUiThread(() -> {
+                    if (isDestroyed() || !loading.isShowing()) return;
+                    loading.dismiss();
+                    importError(error);
+                });
+            }
+        });
+        zipRead = task;
+        loading.setOnCancelListener(ignored -> task.cancel(true));
+    }
+
+    private void copyImportPrompt(Discovery.Topic topic, Discovery.Source source) {
+        String prompt = "根据我随附的资料，为「" + topic.name + "」写适合手机锁屏阅读的发现卡片。"
+                + "每张写一件能在当下观察或尝试的发现，事实以材料所支持的内容为准。"
+                + "\n只输出 JSON 对象，不加 Markdown 代码围栏。结构示例："
+                + "\n{\"cards\":[{\"title\":\"标题\",\"body\":\"一条观察或发现\",\"task\":\"可选的小任务\"}]}"
+                + "\n每批最多 " + CardImport.MAX_CARDS + " 张。title 最多 " + Discovery.MAX_TITLE_LENGTH
+                + " 字符，body 最多 " + Discovery.MAX_BODY_LENGTH
+                + " 字符，task 可省略且最多 " + Discovery.MAX_TASK_LENGTH + " 字符。";
+        if (!topic.context.isEmpty()) prompt += "\n主题背景：" + topic.context;
+        if (source != null) {
+            prompt += "\n本批资料：" + source.label;
+            if (!source.url.isEmpty()) prompt += "\n" + source.url;
+        }
+        getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("卡片生成提示", prompt));
+        if (Build.VERSION.SDK_INT < 33) notice("已复制提示");
+    }
+
+    private void reviewImport(AlertDialog entry, ImportTarget target, List<CardImport.Draft> drafts,
+                              int duplicates, CardZipImport.Bundle bundle) {
+        String[] labels = new String[drafts.size()];
+        boolean[] checked = new boolean[drafts.size()];
+        for (int i = 0; i < drafts.size(); i++) {
+            labels[i] = drafts.get(i).reviewText();
+            checked[i] = true;
+        }
+        String heading = "审阅 " + drafts.size() + " 张卡片";
+        if (duplicates > 0) heading += " · 跳过 " + duplicates + " 张重复";
+        AlertDialog.Builder builder = new AlertDialog.Builder(this)
+                .setTitle(heading)
+                .setNegativeButton("返回", null)
+                .setPositiveButton("导入选中卡片", null);
+        if (bundle == null) {
+            builder.setMultiChoiceItems(labels, checked, (dialog, index, selected) -> checked[index] = selected);
+        } else {
+            builder.setView(mediaReview(drafts, checked, bundle));
+        }
+        AlertDialog review = builder.show();
+        if (bundle != null) {
+            review.setOnDismissListener(ignored -> {
+                stopAudio();
+                if (reviewedZip == bundle) {
+                    reviewedZip = null;
+                    bundle.close();
+                }
+            });
+        }
+        review.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
+            List<CardImport.Draft> selected = new ArrayList<>();
+            for (int i = 0; i < drafts.size(); i++) {
+                if (checked[i]) selected.add(drafts.get(i));
+            }
+            if (selected.isEmpty()) {
+                notice("请至少选中一张卡片");
+                return;
+            }
+            if (bundle != null) {
+                saveImportZip(entry, review, target, selected, bundle);
+                return;
+            }
+            List<Discovery.Card> added = new ArrayList<>();
+            if (commit(latest -> added.addAll(CardImport.add(latest, target.topicId(), target.sourceId(), selected)))) {
+                finishImport(entry, review, added);
+            }
+        });
+    }
+
+    private ScrollView mediaReview(List<CardImport.Draft> drafts, boolean[] checked, CardZipImport.Bundle bundle) {
+        ScrollView container = new ScrollView(this);
+        LinearLayout rows = fields();
+        container.addView(rows);
+        for (int i = 0; i < drafts.size(); i++) {
+            int index = i;
+            CardImport.Draft card = drafts.get(i);
+            CheckBox check = new CheckBox(this);
+            check.setText(card.reviewText());
+            check.setTextColor(TEXT);
+            check.setMinimumHeight(dp(48));
+            check.setChecked(checked[index]);
+            check.setOnCheckedChangeListener((control, selected) -> checked[index] = selected);
+            top(rows, check, i == 0 ? 0 : 12);
+            if (card.image().isEmpty() && card.audio().isEmpty()) continue;
+            LinearLayout actions = row();
+            top(rows, actions, 4);
+            if (!card.image().isEmpty()) {
+                equal(actions, button("查看图片", () -> showImportImage(bundle, card), false), 0);
+            }
+            if (!card.audio().isEmpty()) {
+                equal(actions, button("试听音频", () -> play(bundle.previewUri(card.audio())), false),
+                        card.image().isEmpty() ? 0 : 8);
+            }
+        }
+        return container;
+    }
+
+    private void showImportImage(CardZipImport.Bundle bundle, CardImport.Draft card) {
+        Context app = getApplicationContext();
+        previewWorker.execute(() -> {
+            Bitmap bitmap = WallpaperArt.readPhoto(app, bundle.previewUri(card.image()), 640, 640);
+            runOnUiThread(() -> {
+                if (isDestroyed() || reviewedZip != bundle) {
+                    if (bitmap != null) bitmap.recycle();
+                    return;
+                }
+                if (bitmap == null) {
+                    notice("无法显示图片。");
+                    return;
+                }
+                ImageView image = new ImageView(this);
+                image.setAdjustViewBounds(true);
+                image.setMaxHeight(dp(440));
+                image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                image.setImageBitmap(bitmap);
+                new AlertDialog.Builder(this).setTitle(card.title()).setView(image)
+                        .setPositiveButton("返回", null).show();
+            });
+        });
+    }
+
+    private void saveImportZip(AlertDialog entry, AlertDialog review, ImportTarget target,
+                               List<CardImport.Draft> selected, CardZipImport.Bundle bundle) {
+        stopAudio();
+        AlertDialog saving = new AlertDialog.Builder(this)
+                .setMessage("正在保存卡片和媒体…")
+                .setCancelable(false)
+                .show();
+        reviewedZip = null;
+        Context app = getApplicationContext();
+        importWorker.execute(() -> {
+            try {
+                List<Discovery.Card> added = bundle.save(app, target.topicId(), target.sourceId(), selected);
+                bundle.close();
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    saving.dismiss();
+                    finishImport(entry, review, added);
+                });
+            } catch (IOException | RuntimeException error) {
+                runOnUiThread(() -> {
+                    if (isDestroyed()) {
+                        bundle.close();
+                        return;
+                    }
+                    reviewedZip = bundle;
+                    saving.dismiss();
+                    importError(error);
+                });
+            }
+        });
+    }
+
+    private void finishImport(AlertDialog entry, AlertDialog review, List<Discovery.Card> added) {
+        review.dismiss();
+        if (entry != null) entry.dismiss();
+        if (!added.isEmpty()) previewId = added.get(0).id;
+        notice(added.isEmpty() ? "这些卡片已在本主题中" : "已导入 " + added.size() + " 张卡片");
+        refresh(true);
+    }
+
+    private void importError(Throwable error) {
+        Log.w(WallpaperDelivery.TAG, "Could not import card bundle", error);
+        String detail = error instanceof IOException ? error.getMessage() : null;
+        new AlertDialog.Builder(this).setTitle("导入失败")
+                .setMessage(detail == null || detail.isEmpty() ? "无法读取或保存 ZIP。" : detail)
+                .setPositiveButton("返回", null).show();
     }
 
     private void pick(String mimeType, int request) {
@@ -549,6 +841,14 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == PICK_IMPORT_ZIP) {
+            ImportTarget target = pendingZip;
+            pendingZip = null;
+            if (target != null && result == RESULT_OK && data != null && data.getData() != null) {
+                loadImportZip(importEntry, target, data.getData());
+            }
+            return;
+        }
         if (draft == null || result != RESULT_OK || data == null || data.getData() == null) return;
         if (request != PICK_PHOTO && request != PICK_AUDIO) return;
         Uri uri = data.getData();
@@ -609,7 +909,14 @@ public final class MainActivity extends Activity {
             });
             if (uri.equals("sample")) playing.start();
             else {
-                playing.setDataSource(this, Uri.parse(uri));
+                Uri source = Uri.parse(uri);
+                if ("file".equals(source.getScheme())) {
+                    try (FileInputStream input = new FileInputStream(source.getPath())) {
+                        playing.setDataSource(input.getFD());
+                    }
+                } else {
+                    playing.setDataSource(this, source);
+                }
                 playing.setOnPreparedListener(ready -> {
                     if (player == ready) ready.start();
                 });
