@@ -12,6 +12,8 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 final class Store {
@@ -39,7 +41,7 @@ final class Store {
                 for (int j = 0; j < sources.length(); j++) {
                     JSONObject source = sources.getJSONObject(j);
                     topic.sources.add(new Discovery.Source(source.getString("id"), source.getString("label"),
-                            source.optString("url")));
+                            source.optString("url"), source.optString("fileUri"), source.optString("pdfHash")));
                 }
                 state.topics.put(topic.id, topic);
             }
@@ -48,7 +50,7 @@ final class Store {
                 JSONObject row = cards.getJSONObject(i);
                 Discovery.Card card = new Discovery.Card(row.getString("id"), row.getString("topic"),
                         row.getString("title"), row.getString("body"), row.optString("task"),
-                        row.optString("source"), row.optString("photo"), row.optString("audio"),
+                        sourceIds(row), row.optString("photo"), row.optString("audio"),
                         row.optString("palette", "forest"));
                 state.cards.put(card.id, card);
             }
@@ -69,6 +71,18 @@ final class Store {
         }
     }
 
+    private static List<String> sourceIds(JSONObject row) throws JSONException {
+        JSONArray array = row.optJSONArray("sourceIds");
+        List<String> ids = new ArrayList<>();
+        if (array == null) {
+            String legacy = row.optString("source");
+            if (!legacy.isEmpty()) ids.add(legacy);
+        } else {
+            for (int i = 0; i < array.length(); i++) ids.add(array.getString(i));
+        }
+        return ids;
+    }
+
     static synchronized void edit(Context context, Edit edit) throws IOException {
         Discovery.State state = read(context);
         edit.apply(state);
@@ -83,7 +97,7 @@ final class Store {
                 JSONArray sources = new JSONArray();
                 for (Discovery.Source source : topic.sources) {
                     sources.put(new JSONObject().put("id", source.id).put("label", source.label)
-                            .put("url", source.url));
+                            .put("url", source.url).put("fileUri", source.fileUri).put("pdfHash", source.pdfHash));
                 }
                 topics.put(new JSONObject().put("id", topic.id).put("name", topic.name)
                         .put("enabled", topic.enabled).put("context", topic.context).put("sources", sources));
@@ -92,7 +106,8 @@ final class Store {
             for (Discovery.Card card : state.cards.values()) {
                 cards.put(new JSONObject().put("id", card.id).put("topic", card.topicId)
                         .put("title", card.title).put("body", card.body).put("task", card.task)
-                        .put("source", card.sourceId).put("photo", card.photoUri).put("audio", card.audioUri)
+                        .put("sourceIds", new JSONArray(card.sourceIds))
+                        .put("photo", card.photoUri).put("audio", card.audioUri)
                         .put("palette", card.palette));
             }
             JSONObject seen = new JSONObject();

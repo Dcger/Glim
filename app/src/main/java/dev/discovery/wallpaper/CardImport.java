@@ -5,7 +5,13 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.InterruptedIOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -26,6 +32,25 @@ final class CardImport {
 
     interface MediaResolver {
         String resolve(String path) throws IOException;
+    }
+
+    static List<Draft> readJson(InputStream input, boolean fromZip) throws IOException {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        byte[] buffer = new byte[8192];
+        int size;
+        while ((size = input.read(buffer)) != -1) {
+            if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException();
+            if (output.size() + size > MAX_INPUT_LENGTH * 4 + 3) throw new IOException("JSON 文件内容过长。");
+            output.write(buffer, 0, size);
+        }
+        String text;
+        try {
+            text = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(output.toByteArray())).toString();
+        } catch (CharacterCodingException error) {
+            throw new IOException("JSON 文件请使用 UTF-8 编码。", error);
+        }
+        if (text.startsWith("\ufeff")) text = text.substring(1);
+        return parse(text.trim(), fromZip);
     }
 
     static List<Draft> parse(String text, boolean fromZip) throws IOException {
@@ -52,7 +77,7 @@ final class CardImport {
             String image = field(row, number, "image", 240, false);
             String audio = field(row, number, "audio", 240, false);
             if (!fromZip && (!image.isEmpty() || !audio.isEmpty())) {
-                throw new IOException("带图片或音频的卡片请使用「选择 ZIP 文件」。");
+                throw new IOException("带图片或音频的卡片请打包为 ZIP。");
             }
             drafts.add(new Draft(
                     field(row, number, "title", Discovery.MAX_TITLE_LENGTH, true),
@@ -90,25 +115,27 @@ final class CardImport {
         return unique;
     }
 
-    static List<Discovery.Card> add(Discovery.State state, String topicId, String sourceId,
+    static List<Discovery.Card> add(Discovery.State state, String topicId, List<String> sourceIds,
                                     List<Draft> drafts) throws IOException {
-        return add(state, topicId, sourceId, drafts, path -> {
+        return add(state, topicId, sourceIds, drafts, path -> {
             throw new IOException("找不到媒体文件。");
         });
     }
 
-    static List<Discovery.Card> add(Discovery.State state, String topicId, String sourceId,
+    static List<Discovery.Card> add(Discovery.State state, String topicId, List<String> sourceIds,
                                     List<Draft> drafts, MediaResolver media) throws IOException {
         Discovery.Topic topic = state.topics.get(topicId);
         if (topic == null) throw new IOException("当前主题已不存在。");
-        if (!sourceId.isEmpty() && topic.sources.stream().noneMatch(source -> source.id.equals(sourceId))) {
-            throw new IOException("选中的资料已不存在。请重新选择。");
+        for (String id : sourceIds) {
+            if (topic.sources.stream().noneMatch(source -> source.id.equals(id))) {
+                throw new IOException("选中的资料已不存在。请重新选择。");
+            }
         }
         List<Discovery.Card> added = new ArrayList<>();
         for (Draft draft : unique(state, topicId, drafts)) {
             String id = UUID.randomUUID().toString();
             Discovery.Card card = new Discovery.Card(id, topicId, draft.title(), draft.body(),
-                    draft.task(), sourceId,
+                    draft.task(), sourceIds,
                     draft.image().isEmpty() ? "" : media.resolve(draft.image()),
                     draft.audio().isEmpty() ? "" : media.resolve(draft.audio()), "forest");
             state.cards.put(id, card);

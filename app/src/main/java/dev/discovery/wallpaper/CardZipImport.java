@@ -8,7 +8,6 @@ import android.media.MediaFormat;
 import android.net.Uri;
 import android.util.Log;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -16,9 +15,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
-import java.nio.ByteBuffer;
-import java.nio.charset.CharacterCodingException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -49,14 +45,14 @@ final class CardZipImport {
             return Uri.fromFile(files.get(path)).toString();
         }
 
-        List<Discovery.Card> save(Context app, String topicId, String sourceId,
+        List<Discovery.Card> save(Context app, String topicId, List<String> sourceIds,
                                   List<CardImport.Draft> selected) throws IOException {
             File destination = new File(app.getFilesDir(), "card-media-" + UUID.randomUUID());
             Map<String, String> stored = new HashMap<>();
             List<Discovery.Card> added = new ArrayList<>();
             boolean committed = false;
             try {
-                Store.edit(app, state -> added.addAll(CardImport.add(state, topicId, sourceId, selected,
+                Store.edit(app, state -> added.addAll(CardImport.add(state, topicId, sourceIds, selected,
                         path -> {
                             String previous = stored.get(path);
                             if (previous != null) return previous;
@@ -85,13 +81,6 @@ final class CardZipImport {
         @Override
         public void close() {
             remove(temporary);
-        }
-    }
-
-    static Bundle read(Context app, Uri uri) throws IOException {
-        try (InputStream input = app.getContentResolver().openInputStream(uri)) {
-            if (input == null) throw new IOException("无法读取所选 ZIP。");
-            return read(input, app.getCacheDir());
         }
     }
 
@@ -141,18 +130,9 @@ final class CardZipImport {
 
     private static List<CardImport.Draft> readCards(ZipFile zip, ZipEntry entry) throws IOException {
         if (entry == null) throw new IOException("请把 cards.json 放在 ZIP 根目录。");
-        ByteArrayOutputStream output = new ByteArrayOutputStream();
         try (InputStream input = zip.getInputStream(entry)) {
-            transfer(input, output, CardImport.MAX_INPUT_LENGTH * 4L + 3, "cards.json 内容过长。");
+            return CardImport.readJson(input, true);
         }
-        String text;
-        try {
-            text = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(output.toByteArray())).toString();
-        } catch (CharacterCodingException error) {
-            throw new IOException("cards.json 请使用 UTF-8 编码。", error);
-        }
-        if (text.startsWith("\ufeff")) text = text.substring(1);
-        return CardImport.parse(text.trim(), true);
     }
 
     private static long extract(ZipFile zip, Map<String, ZipEntry> entries, Map<String, File> files,
@@ -250,6 +230,23 @@ final class CardZipImport {
         if (files == null) return;
         for (File file : files) delete(file);
         delete(directory);
+    }
+
+    static void releaseUnused(Context app, Uri uri) {
+        String path = uri.getPath();
+        if (path == null) return;
+        try {
+            File file = new File(path).getCanonicalFile();
+            File parent = file.getParentFile();
+            if (parent == null || !parent.getName().startsWith("card-media-")
+                    || !app.getFilesDir().getCanonicalFile().equals(parent.getParentFile())
+                    || !file.getName().startsWith("asset-")) return;
+            delete(file);
+            String[] remaining = parent.list();
+            if (remaining != null && remaining.length == 0) delete(parent);
+        } catch (IOException error) {
+            Log.w(WallpaperDelivery.TAG, "Could not release unused imported media", error);
+        }
     }
 
     private static void delete(File file) {

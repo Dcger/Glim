@@ -28,7 +28,7 @@ import android.util.Size;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
-import android.widget.ArrayAdapter;
+import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -36,20 +36,25 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
-import android.widget.Spinner;
 import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.io.FileInputStream;
+import java.io.BufferedInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.function.Consumer;
 
 public final class MainActivity extends Activity {
     private static final int BACKGROUND = 0xff111612;
@@ -58,9 +63,12 @@ public final class MainActivity extends Activity {
     private static final int ACCENT = 0xffd5ee92;
     private static final int TEXT = 0xfff4f5eb;
     private static final int MUTED = 0xffb5c3b3;
+    private static final int DELETE_ACCENT = 0xffffb5aa;
     private static final int PICK_PHOTO = 1;
     private static final int PICK_AUDIO = 2;
-    private static final int PICK_IMPORT_ZIP = 4;
+    private static final int PICK_CARD_FILE = 4;
+    private static final int PICK_SOURCE_PDF = 5;
+    private static final int PICK_PDF_BATCH = 6;
 
     private LinearLayout root;
     private LinearLayout content;
@@ -84,10 +92,17 @@ public final class MainActivity extends Activity {
     private Future<?> previewTask;
     private final ExecutorService importWorker = Executors.newSingleThreadExecutor();
     private Future<?> zipRead;
-    private ImportTarget pendingZip;
+    private ImportTarget pendingCardFile;
     private AlertDialog importEntry;
+    private String pendingPdfTopic;
     private CardZipImport.Bundle reviewedZip;
     private CardDraft draft;
+    private SourceDraft sourceDraft;
+    private Bundle restoreSourceDraft;
+    private String importTopicId = "";
+    private final ArrayList<String> importSourceIds = new ArrayList<>();
+    private boolean includeTopicNotes;
+    private String customAgentNotes = "";
     private MediaPlayer player;
     private final BroadcastReceiver rotationUpdates = new BroadcastReceiver() {
         @Override
@@ -106,7 +121,15 @@ public final class MainActivity extends Activity {
             showTopics = saved.getBoolean("topics");
             previewId = saved.getString("preview", "");
             String topicId = saved.getString("zipTopic");
-            if (topicId != null) pendingZip = new ImportTarget(topicId, saved.getString("zipSource", ""));
+            if (topicId != null) pendingCardFile =
+                    new ImportTarget(topicId, saved.getStringArrayList("zipSources"));
+            pendingPdfTopic = saved.getString("pendingPdfTopic");
+            restoreSourceDraft = saved.getBundle("sourceDraft");
+            importTopicId = saved.getString("importTopic", "");
+            ArrayList<String> selected = saved.getStringArrayList("importSources");
+            if (selected != null) importSourceIds.addAll(selected);
+            includeTopicNotes = saved.getBoolean("includeTopicNotes");
+            customAgentNotes = saved.getString("customAgentNotes", "");
         }
         root = column();
         root.setBackgroundColor(BACKGROUND);
@@ -145,16 +168,23 @@ public final class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refresh(true);
+        restoreSourceEditor();
     }
 
     @Override
     protected void onSaveInstanceState(Bundle out) {
         out.putBoolean("topics", showTopics);
         out.putString("preview", previewId);
-        if (pendingZip != null) {
-            out.putString("zipTopic", pendingZip.topicId());
-            out.putString("zipSource", pendingZip.sourceId());
+        if (pendingCardFile != null) {
+            out.putString("zipTopic", pendingCardFile.topicId());
+            out.putStringArrayList("zipSources", new ArrayList<>(pendingCardFile.sourceIds()));
         }
+        if (sourceDraft != null) out.putBundle("sourceDraft", sourceDraft.snapshot());
+        out.putString("pendingPdfTopic", pendingPdfTopic);
+        out.putString("importTopic", importTopicId);
+        out.putStringArrayList("importSources", new ArrayList<>(importSourceIds));
+        out.putBoolean("includeTopicNotes", includeTopicNotes);
+        out.putString("customAgentNotes", customAgentNotes);
         super.onSaveInstanceState(out);
     }
 
@@ -336,10 +366,16 @@ public final class MainActivity extends Activity {
         gapText(details, card.title, 22, TEXT, true, 6);
         gapText(details, card.body, 15, TEXT, false, 8);
         if (!card.task.isEmpty()) gapText(details, "试一试 · " + card.task, 14, ACCENT, false, 10);
-        Discovery.Source source = state.source(card);
-        if (source != null) {
-            if (source.url.isEmpty()) gapText(details, source.label, 13, MUTED, false, 8);
-            else top(details, button(source.label + " ↗", () -> openLink(source), false), 8);
+        for (Discovery.Source source : state.sources(card)) {
+            if (source.url.isEmpty() && source.fileUri.isEmpty()) {
+                gapText(details, source.label, 13, MUTED, false, 8);
+            }
+            if (!source.fileUri.isEmpty()) {
+                top(details, button(source.label + " · PDF", () -> openSourcePdf(source), false), 8);
+            }
+            if (!source.url.isEmpty()) {
+                top(details, button(source.label + " ↗", () -> openLink(source), false), 8);
+            }
         }
         if (!card.audioUri.isEmpty()) {
             top(details, button(card.audioUri.equals("sample") ? "播放合成音对比" : "播放音频",
@@ -429,8 +465,7 @@ public final class MainActivity extends Activity {
             LinearLayout actions = row();
             top(box, actions, 10);
             equal(actions, button("资料与备注", () -> topicDetails(topic), false), 0);
-            equal(actions, button("添加卡片", () -> addCard(topic), false), 8);
-            top(box, button("批量导入卡片", () -> importCards(topic), false), 8);
+            equal(actions, button("添加卡片", () -> chooseCardEntry(topic), false), 8);
         }
         top(content, button("新建主题", this::newTopic, true), 14);
     }
@@ -450,26 +485,149 @@ public final class MainActivity extends Activity {
     }
 
     private void topicDetails(Discovery.Topic topic) {
+        LinearLayout layout = column();
+        LinearLayout actions = row();
+        actions.setPadding(dp(22), dp(6), dp(22), dp(8));
+        layout.addView(actions);
+        ScrollView body = new ScrollView(this);
+        layout.addView(body, new LinearLayout.LayoutParams(-1, -2, 1));
         LinearLayout fields = fields();
+        body.addView(fields);
         EditText name = field(fields, "主题名", topic.name, 32, 1);
         EditText notes = field(fields, "本地背景或备注", topic.context, 900, 3);
-        for (Discovery.Source source : topic.sources) {
-            if (source.url.isEmpty()) gapText(fields, source.label, 14, TEXT, false, 10);
-            else top(fields, button(source.label + " ↗", () -> openLink(source), false), 8);
-        }
-        AlertDialog dialog = dialog("资料与备注", fields);
-        Button add = button("添加资料", () -> {
+        LinearLayout list = column();
+        top(fields, list, 12);
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("资料与备注")
+                .setView(layout).setNegativeButton("取消", null).create();
+        Consumer<Discovery.Source> edit = source -> {
             if (saveTopic(topic, name, notes)) {
                 dialog.dismiss();
-                addSource(topic.id);
+                editSource(topic.id, source, null);
             }
-        }, false);
-        top(fields, add, 12);
+        };
+        equal(actions, button("添加资料", () -> new AlertDialog.Builder(this).setTitle("添加资料")
+                .setItems(new String[]{"添加单份资料", "批量导入 PDF"}, (menu, which) -> {
+                    if (which == 0) edit.accept(null);
+                    else if (saveTopic(topic, name, notes)) {
+                        dialog.dismiss();
+                        pickPdfBatch(topic.id);
+                    }
+                }).setNegativeButton("取消", null).show(), true), 0);
+        Button delete = button("删除资料", () -> {}, DELETE_ACCENT, BACKGROUND);
+        delete.setOnClickListener(view -> {
+            Discovery.Topic current = state == null ? null : state.topics.get(topic.id);
+            if (current == null || current.sources.isEmpty()) return;
+            chooseSourcesToDelete(current, updated -> {
+                renderTopicSources(list, updated, edit);
+                delete.setEnabled(!updated.sources.isEmpty());
+            });
+        });
+        delete.setEnabled(!topic.sources.isEmpty());
+        equal(actions, delete, 8);
+        renderTopicSources(list, topic, edit);
         dialog.setButton(AlertDialog.BUTTON_POSITIVE, "保存", (dialogInterface, which) -> {});
+        dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "删除主题", (dialogInterface, which) -> {});
+        dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+                | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         dialog.show();
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             if (saveTopic(topic, name, notes)) dialog.dismiss();
         });
+        Button deleteTopic = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+        deleteTopic.setTextColor(DELETE_ACCENT);
+        deleteTopic.setOnClickListener(view -> confirmTopicDeletion(topic.id, dialog));
+    }
+
+    private void renderTopicSources(LinearLayout list, Discovery.Topic topic, Consumer<Discovery.Source> edit) {
+        list.removeAllViews();
+        if (topic.sources.isEmpty()) {
+            gapText(list, "还没有资料", 14, MUTED, false, 0);
+            return;
+        }
+        for (Discovery.Source source : topic.sources) {
+            top(list, button(sourceLabel(source), () -> edit.accept(source), false), 8);
+        }
+    }
+
+    private void chooseSourcesToDelete(Discovery.Topic topic, Consumer<Discovery.Topic> onDeleted) {
+        String[] labels = new String[topic.sources.size()];
+        boolean[] checked = new boolean[labels.length];
+        for (int i = 0; i < labels.length; i++) labels[i] = sourceLabel(topic.sources.get(i));
+        Set<String> selected = new HashSet<>();
+        AlertDialog picker = new AlertDialog.Builder(this).setTitle("选择要删除的资料")
+                .setMultiChoiceItems(labels, checked, (dialog, index, on) -> {
+                    String id = topic.sources.get(index).id;
+                    if (on) selected.add(id);
+                    else selected.remove(id);
+                    Button confirm = ((AlertDialog) dialog).getButton(AlertDialog.BUTTON_POSITIVE);
+                    confirm.setText(selected.isEmpty() ? "删除" : "删除 " + selected.size() + " 份");
+                    confirm.setEnabled(!selected.isEmpty());
+                })
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", null).show();
+        Button select = picker.getButton(AlertDialog.BUTTON_POSITIVE);
+        select.setEnabled(false);
+        select.setOnClickListener(view -> confirmSourceDeletion(topic.id, selected, picker, onDeleted));
+    }
+
+    private void confirmSourceDeletion(String topicId, Set<String> ids, AlertDialog picker,
+                                       Consumer<Discovery.Topic> onDeleted) {
+        AlertDialog confirmation = new AlertDialog.Builder(this)
+                .setTitle("删除 " + ids.size() + " 份资料？")
+                .setMessage("删除后，卡片上的相关资料链接也会移除。卡片和原 PDF 会保留。")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("删除", null).show();
+        Button confirm = confirmation.getButton(AlertDialog.BUTTON_POSITIVE);
+        confirm.setTextColor(DELETE_ACCENT);
+        confirm.setOnClickListener(view -> {
+            List<Discovery.Source> removed = new ArrayList<>();
+            if (!commit(latest -> removed.addAll(latest.removeSources(topicId, ids)))) return;
+            confirmation.dismiss();
+            if (picker != null) picker.dismiss();
+            refresh(true);
+            Discovery.Topic updated = state == null ? null : state.topics.get(topicId);
+            if (updated != null) onDeleted.accept(updated);
+            for (Discovery.Source source : removed) releaseUnused(source.fileUri);
+            notice("已删除 " + removed.size() + " 份资料");
+        });
+    }
+
+    private void confirmTopicDeletion(String topicId, AlertDialog details) {
+        Discovery.Topic topic = state == null ? null : state.topics.get(topicId);
+        if (topic == null) return;
+        long cards = state.cards.values().stream().filter(card -> topicId.equals(card.topicId)).count();
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("删除「" + topic.name + "」？")
+                .setMessage("将删除此主题及其中的 " + cards + " 张卡片、" + topic.sources.size()
+                        + " 份资料记录。设备上的原文件会保留。")
+                .setNegativeButton("取消", null).setPositiveButton("删除主题", null).show();
+        Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+        confirm.setTextColor(DELETE_ACCENT);
+        confirm.setOnClickListener(view -> {
+            Set<String> released = new HashSet<>();
+            if (!commit(latest -> latest.removeTopic(topicId, released))) return;
+            dialog.dismiss();
+            details.dismiss();
+            if (topicId.equals(importTopicId)) {
+                importTopicId = "";
+                resetAgentOptions();
+            }
+            refresh(true);
+            for (String uri : released) releaseUnused(uri);
+            notice("主题已删除");
+        });
+    }
+
+    private static String sourceLabel(Discovery.Source source) {
+        return source.fileUri.isEmpty() ? source.label : source.label + " · PDF";
+    }
+
+    private void chooseCardEntry(Discovery.Topic topic) {
+        new AlertDialog.Builder(this).setTitle("添加卡片 · " + topic.name)
+                .setItems(new String[]{"手动添加卡片", "批量导入卡片"}, (dialog, which) -> {
+                    if (which == 0) addCard(topic);
+                    else importCards(topic);
+                })
+                .setNegativeButton("取消", null).show();
     }
 
     private boolean saveTopic(Discovery.Topic topic, EditText name, EditText notes) {
@@ -483,22 +641,186 @@ public final class MainActivity extends Activity {
         return saved;
     }
 
-    private void addSource(String topicId) {
+    private void editSource(String topicId, Discovery.Source existing, Bundle saved) {
         LinearLayout fields = fields();
-        EditText label = field(fields, "书名、视频标题或资料名", "", 130, 1);
-        EditText address = field(fields, "网页链接（可选）", "", 1500, 1);
+        String labelText = saved != null ? saved.getString("label", "") : existing == null ? "" : existing.label;
+        String urlText = saved != null ? saved.getString("url", "") : existing == null ? "" : existing.url;
+        EditText label = field(fields, "书名、视频标题或资料名", labelText, 255, 1);
+        EditText address = field(fields, "网页链接（可选）", urlText, 1500, 1);
         address.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        form("添加资料", fields, () -> {
-            if (value(label).isEmpty()) return missing(label, "填写资料名");
-            String url = value(address);
-            Uri parsed = Uri.parse(url);
-            if (!url.isEmpty() && (!("https".equalsIgnoreCase(parsed.getScheme())
-                    || "http".equalsIgnoreCase(parsed.getScheme())) || parsed.getHost() == null)) {
-                return missing(address, "填写完整的网页链接");
-            }
-            return commit(value -> value.topics.get(topicId).sources.add(
-                    new Discovery.Source(uuid(), value(label), url)));
+        SourceDraft editing = new SourceDraft(topicId, existing, label, address);
+        if (saved != null) {
+            editing.fileUri = saved.getString("fileUri", "");
+            editing.filename = saved.getString("filename", "");
+        } else if (!editing.fileUri.isEmpty()) {
+            editing.filename = AgentShare.filename(this, Uri.parse(editing.fileUri));
+        }
+        sourceDraft = editing;
+        top(fields, button("选择 PDF 文件", () -> pick(AgentShare.PDF, PICK_SOURCE_PDF), false), 8);
+        editing.pdf = gapText(fields, "", 14, TEXT, false, 8);
+        Button remove = button("移除 PDF 附件", () -> {
+            editing.fileUri = "";
+            editing.filename = "";
+            editing.showFile();
+        }, false);
+        editing.remove = remove;
+        top(fields, remove, 8);
+        editing.showFile();
+        if (existing != null && !existing.url.isEmpty()) {
+            top(fields, button("打开原网页", () -> openLink(existing), false), 8);
+        }
+        AlertDialog editor = dialog(existing == null ? "添加资料" : "编辑资料", fields);
+        editor.setOnDismissListener(ignored -> {
+            if (sourceDraft == editing) sourceDraft = null;
         });
+        editor.setButton(AlertDialog.BUTTON_POSITIVE, "保存", (dialog, which) -> {});
+        if (existing != null) {
+            editor.setButton(AlertDialog.BUTTON_NEUTRAL, "删除资料", (dialog, which) -> {});
+        }
+        editor.show();
+        editor.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> saveSource(editing, editor));
+        if (existing != null) {
+            Button delete = editor.getButton(AlertDialog.BUTTON_NEUTRAL);
+            delete.setTextColor(DELETE_ACCENT);
+            delete.setOnClickListener(view -> confirmSourceDeletion(topicId,
+                    java.util.Collections.singleton(existing.id), null, updated -> editor.dismiss()));
+        }
+    }
+
+    private void restoreSourceEditor() {
+        Bundle saved = restoreSourceDraft;
+        if (saved == null) return;
+        restoreSourceDraft = null;
+        try {
+            Discovery.Topic topic = Store.read(this).topics.get(saved.getString("topic"));
+            if (topic == null) return;
+            String id = saved.getString("id", "");
+            Discovery.Source source = topic.sources.stream().filter(item -> item.id.equals(id))
+                    .findFirst().orElse(null);
+            if (id.isEmpty() || source != null) editSource(topic.id, source, saved);
+        } catch (IOException error) {
+            notice("无法恢复资料编辑。");
+        }
+    }
+
+    private void saveSource(SourceDraft editing, AlertDialog editor) {
+        String label = value(editing.label);
+        if (label.isEmpty()) {
+            missing(editing.label, "填写资料名");
+            return;
+        }
+        String url = value(editing.address);
+        Uri parsed = Uri.parse(url);
+        if (!url.isEmpty() && (!("https".equalsIgnoreCase(parsed.getScheme())
+                || "http".equalsIgnoreCase(parsed.getScheme())) || parsed.getHost() == null)) {
+            missing(editing.address, "填写完整的网页链接");
+            return;
+        }
+        String id = editing.existing == null ? "" : editing.existing.id;
+        String uri = editing.fileUri;
+        runSourceWork("正在保存资料…",
+                app -> PdfSources.save(app, editing.topicId, id, label, url, uri), previousUri -> {
+            editor.dismiss();
+            refresh(true);
+            releaseUnused(previousUri);
+        });
+    }
+
+    private void pickPdfBatch(String topicId) {
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType(AgentShare.PDF)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        pendingPdfTopic = topicId;
+        try {
+            startActivityForResult(intent, PICK_PDF_BATCH);
+        } catch (ActivityNotFoundException error) {
+            pendingPdfTopic = null;
+            notice("系统文件选择器不可用");
+        }
+    }
+
+    private void importPdfBatch(String topicId, Intent data) {
+        Set<Uri> files = new LinkedHashSet<>();
+        if (data.getData() != null) files.add(data.getData());
+        ClipData clip = data.getClipData();
+        if (clip != null) for (int i = 0; i < clip.getItemCount(); i++) {
+            Uri uri = clip.getItemAt(i).getUri();
+            if (uri != null) files.add(uri);
+        }
+        if (files.isEmpty()) return;
+        runSourceWork("正在检查 PDF…", app -> PdfSources.addAll(app, topicId, new ArrayList<>(files)), result -> {
+            refresh(true);
+            Discovery.Topic topic = state == null ? null : state.topics.get(topicId);
+            if (topic != null) topicDetails(topic);
+            String summary = "已导入 " + result.added() + " 份，跳过重复 " + result.duplicates() + " 份";
+            if (result.failed() > 0) summary += "，无法导入 " + result.failed() + " 份"
+                    + "\n请检查文件访问权限，例如「" + result.exampleFailure() + "」。";
+            new AlertDialog.Builder(this).setTitle("PDF 导入结果").setMessage(summary)
+                    .setPositiveButton("确定", null).show();
+        });
+    }
+
+    private interface SourceWork<T> {
+        T run(Context app) throws IOException;
+    }
+
+    private <T> void runSourceWork(String label, SourceWork<T> work, Consumer<T> done) {
+        AlertDialog loading = new AlertDialog.Builder(this).setMessage(label).setCancelable(false).show();
+        Context app = getApplicationContext();
+        importWorker.execute(() -> {
+            try {
+                T result = work.run(app);
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    loading.dismiss();
+                    done.accept(result);
+                });
+            } catch (IOException | RuntimeException error) {
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    loading.dismiss();
+                    new AlertDialog.Builder(this).setTitle("资料保存失败")
+                            .setMessage(error instanceof IOException ? error.getMessage() : "请重试。")
+                            .setPositiveButton("返回", null).show();
+                });
+            }
+        });
+    }
+    private static final class SourceDraft {
+        final String topicId;
+        final Discovery.Source existing;
+        final EditText label;
+        final EditText address;
+        TextView pdf;
+        Button remove;
+        String fileUri;
+        String filename = "";
+
+        SourceDraft(String topicId, Discovery.Source existing, EditText label, EditText address) {
+            this.topicId = topicId;
+            this.existing = existing;
+            this.label = label;
+            this.address = address;
+            fileUri = existing == null ? "" : existing.fileUri;
+        }
+
+        Bundle snapshot() {
+            Bundle saved = new Bundle();
+            saved.putString("topic", topicId);
+            saved.putString("id", existing == null ? "" : existing.id);
+            saved.putString("label", value(label));
+            saved.putString("url", value(address));
+            saved.putString("fileUri", fileUri);
+            saved.putString("filename", filename);
+            return saved;
+        }
+
+        void showFile() {
+            pdf.setVisibility(fileUri.isEmpty() ? View.GONE : View.VISIBLE);
+            remove.setVisibility(fileUri.isEmpty() ? View.GONE : View.VISIBLE);
+            pdf.setText(filename);
+        }
     }
 
     private void addCard(Discovery.Topic topic) {
@@ -506,7 +828,7 @@ public final class MainActivity extends Activity {
         EditText title = field(fields, "卡片标题", "", Discovery.MAX_TITLE_LENGTH, 1);
         EditText body = field(fields, "观察或发现", "", Discovery.MAX_BODY_LENGTH, 4);
         EditText task = field(fields, "可以马上做的小任务（可选）", "", Discovery.MAX_TASK_LENGTH, 2);
-        Spinner sources = sourcePicker(fields, topic);
+        SourceSelection sources = sourcePicker(fields, topic, new ArrayList<>());
 
         CardDraft editing = new CardDraft();
         draft = editing;
@@ -533,11 +855,9 @@ public final class MainActivity extends Activity {
                 missing(body, "填写一条发现");
                 return;
             }
-            Discovery.Source selected = selectedSource(sources, topic);
-            String sourceId = selected == null ? "" : selected.id;
             String id = uuid();
             Discovery.Card card = new Discovery.Card(id, topic.id, value(title), value(body), value(task),
-                    sourceId, editing.photoUri, editing.audioUri, "forest");
+                    sources.ids, editing.photoUri, editing.audioUri, "forest");
             if (commit(state -> state.cards.put(id, card))) {
                 editing.saved = true;
                 previewId = id;
@@ -547,107 +867,220 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private Spinner sourcePicker(LinearLayout fields, Discovery.Topic topic) {
-        Spinner sources = new Spinner(this);
-        ArrayList<String> labels = new ArrayList<>();
-        labels.add("选择资料（可选）");
-        for (Discovery.Source source : topic.sources) labels.add(source.label);
-        ArrayAdapter<String> adapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item, labels);
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        sources.setAdapter(adapter);
-        sources.setMinimumHeight(dp(48));
-        fields.addView(sources);
-        return sources;
+    private SourceSelection sourcePicker(LinearLayout fields, Discovery.Topic topic, ArrayList<String> ids) {
+        SourceSelection selection = new SourceSelection(topic, ids);
+        Button button = button(sourceSelectionLabel(ids), () -> {}, false);
+        button.setOnClickListener(view -> {
+            if (topic.sources.isEmpty()) {
+                notice("可先在「资料与备注」里添加资料。");
+                return;
+            }
+            String[] labels = new String[topic.sources.size()];
+            boolean[] checked = new boolean[labels.length];
+            for (int i = 0; i < labels.length; i++) {
+                Discovery.Source item = topic.sources.get(i);
+                labels[i] = sourceLabel(item);
+                checked[i] = ids.contains(item.id);
+            }
+            new AlertDialog.Builder(this).setTitle("选择资料")
+                    .setMultiChoiceItems(labels, checked, (dialog, index, on) -> checked[index] = on)
+                    .setNegativeButton("取消", null)
+                    .setPositiveButton("确定", (dialog, which) -> {
+                        ids.clear();
+                        for (int i = 0; i < checked.length; i++) {
+                            if (checked[i]) ids.add(topic.sources.get(i).id);
+                        }
+                        button.setText(sourceSelectionLabel(ids));
+                    }).show();
+        });
+        top(fields, button, 8);
+        return selection;
     }
 
-    private Discovery.Source selectedSource(Spinner picker, Discovery.Topic topic) {
-        int index = picker.getSelectedItemPosition();
-        return index <= 0 ? null : topic.sources.get(index - 1);
+    private String sourceSelectionLabel(List<String> ids) {
+        return ids.isEmpty() ? "选择资料（可选）" : "选择资料 · 已选 " + ids.size() + " 份";
+    }
+
+    private record SourceSelection(Discovery.Topic topic, ArrayList<String> ids) {
+        List<Discovery.Source> sources() {
+            List<Discovery.Source> selected = new ArrayList<>();
+            for (Discovery.Source item : topic.sources) {
+                if (ids.contains(item.id)) selected.add(item);
+            }
+            return selected;
+        }
+
+        ImportTarget target() {
+            return new ImportTarget(topic.id, new ArrayList<>(ids));
+        }
     }
 
     private void importCards(Discovery.Topic topic) {
         LinearLayout fields = fields();
-        Spinner sources = sourcePicker(fields, topic);
-        top(fields, button("复制给 Agent 的提示", () ->
-                copyImportPrompt(topic, selectedSource(sources, topic)), false), 8);
-        Button zip = button("选择 ZIP 文件", () -> pickImportZip(importTarget(topic, sources)), false);
-        top(fields, zip, 8);
-        EditText input = field(fields, "粘贴卡片 JSON", "", CardImport.MAX_INPUT_LENGTH + 1, 5);
-        input.setMaxLines(8);
-        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
-                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        if (!topic.id.equals(importTopicId)) resetAgentOptions();
+        importTopicId = topic.id;
+        if (topic.context.isEmpty()) includeTopicNotes = false;
+        importSourceIds.removeIf(id -> topic.sources.stream().noneMatch(source -> source.id.equals(id)));
+        Button notes = button(agentNotesLabel(), () -> {}, false);
+        notes.setOnClickListener(view -> chooseAgentNotes(topic, notes));
+        top(fields, notes, 0);
+        SourceSelection sources = sourcePicker(fields, topic, importSourceIds);
+        importArrow(fields);
+        Button share = button("发给 Agent 生成卡片", () -> {}, false);
+        share.setOnClickListener(view -> shareWithAgent(share, sources));
+        share.setOnLongClickListener(view -> {
+            copyAgentPrompt(agentPrompt(sources));
+            return true;
+        });
+        top(fields, share, 0);
+        importArrow(fields);
+        LinearLayout methods = row();
+        methods.setBaselineAligned(false);
+        top(fields, methods, 0);
+        equal(methods, button("导入 ZIP / JSON 文件", () -> pickCardFile(sources.target()), true), 0);
+        equal(methods, button("粘贴卡片 JSON", () -> pasteCards(sources.target()), true), 8);
+        methods.getChildAt(0).getLayoutParams().height = LinearLayout.LayoutParams.MATCH_PARENT;
+        methods.getChildAt(1).getLayoutParams().height = LinearLayout.LayoutParams.MATCH_PARENT;
+        gapText(fields, "已有卡片时，可以直接选择导入方式。", 13, MUTED, false, 10);
         AlertDialog entry = dialog("批量导入 · " + topic.name, fields);
         importEntry = entry;
         entry.setOnDismissListener(ignored -> {
             if (importEntry == entry) importEntry = null;
         });
+        entry.show();
+    }
+
+    private void resetAgentOptions() {
+        importSourceIds.clear();
+        includeTopicNotes = false;
+        customAgentNotes = "";
+    }
+
+    private String agentNotesLabel() {
+        return includeTopicNotes || !customAgentNotes.isEmpty() ? "备注说明 · 已设置" : "备注说明（可选）";
+    }
+
+    private void chooseAgentNotes(Discovery.Topic topic, Button control) {
+        LinearLayout fields = fields();
+        CheckBox include = new CheckBox(this);
+        include.setText("附上「资料与备注」的内容");
+        include.setTextColor(TEXT);
+        include.setEnabled(!topic.context.isEmpty());
+        include.setChecked(include.isEnabled() && includeTopicNotes);
+        top(fields, include, 0);
+        gapText(fields, topic.context.isEmpty() ? "此主题还没有备注。" : topic.context, 14, MUTED, false, 4);
+        EditText notes = field(fields, "本次给 Agent 的说明（可选）", customAgentNotes, 3000, 3);
+        AlertDialog dialog = dialog("备注说明", fields);
+        dialog.setButton(AlertDialog.BUTTON_POSITIVE, "确定", (view, which) -> {
+            includeTopicNotes = include.isChecked();
+            customAgentNotes = value(notes);
+            control.setText(agentNotesLabel());
+        });
+        dialog.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+                | WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        dialog.show();
+    }
+
+    private String agentPrompt(SourceSelection selection) {
+        return AgentShare.prompt(selection.topic(), selection.sources(), includeTopicNotes, customAgentNotes);
+    }
+
+    private void pasteCards(ImportTarget target) {
+        LinearLayout fields = fields();
+        EditText input = field(fields, "粘贴卡片 JSON", "", CardImport.MAX_INPUT_LENGTH + 1, 5);
+        input.setMaxLines(8);
+        input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE
+                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        AlertDialog entry = dialog("粘贴卡片 JSON", fields);
         entry.setButton(AlertDialog.BUTTON_POSITIVE, "审阅卡片", (dialog, which) -> {});
         entry.show();
         entry.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             try {
                 List<CardImport.Draft> drafts = CardImport.parse(value(input), false);
-                List<CardImport.Draft> unique = CardImport.unique(state, topic.id, drafts);
+                if (state == null || !state.topics.containsKey(target.topicId())) {
+                    throw new IOException("主题已不存在。");
+                }
+                List<CardImport.Draft> unique = CardImport.unique(state, target.topicId(), drafts);
                 if (unique.isEmpty()) {
                     missing(input, "这些卡片已在本主题中。");
                     return;
                 }
-                reviewImport(entry, importTarget(topic, sources), unique, drafts.size() - unique.size(), null);
+                reviewImport(entry, target, unique, drafts.size() - unique.size(), null);
             } catch (IOException error) {
                 missing(input, error.getMessage());
             }
         });
     }
 
-    private record ImportTarget(String topicId, String sourceId) {}
-
-    private ImportTarget importTarget(Discovery.Topic topic, Spinner sources) {
-        Discovery.Source source = selectedSource(sources, topic);
-        return new ImportTarget(topic.id, source == null ? "" : source.id);
+    private void importArrow(LinearLayout fields) {
+        TextView arrow = gapText(fields, "↓", 18, ACCENT, false, 0);
+        arrow.setGravity(Gravity.CENTER);
+        arrow.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
     }
 
-    private void pickImportZip(ImportTarget target) {
+    private record ImportTarget(String topicId, List<String> sourceIds) {}
+
+    private void pickCardFile(ImportTarget target) {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*")
                 .addCategory(Intent.CATEGORY_OPENABLE)
                 .putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                        "application/zip", "application/x-zip-compressed", "application/octet-stream"});
+                        "application/zip", "application/x-zip-compressed", "application/json",
+                        "text/plain", "application/octet-stream"});
         try {
-            pendingZip = target;
-            startActivityForResult(intent, PICK_IMPORT_ZIP);
+            pendingCardFile = target;
+            startActivityForResult(intent, PICK_CARD_FILE);
         } catch (ActivityNotFoundException error) {
-            pendingZip = null;
+            pendingCardFile = null;
             notice("系统文件选择器不可用");
         }
     }
 
-    private void loadImportZip(AlertDialog entry, ImportTarget target, Uri uri) {
+    private void loadCardFile(AlertDialog entry, ImportTarget target, Uri uri) {
         AlertDialog loading = new AlertDialog.Builder(this)
-                .setMessage("正在读取 ZIP 和媒体文件…")
+                .setMessage("正在读取卡片文件…")
                 .setNegativeButton("取消", (dialog, which) -> dialog.cancel())
                 .show();
         Context app = getApplicationContext();
         Future<?> task = importWorker.submit(() -> {
             try {
-                CardZipImport.Bundle bundle = CardZipImport.read(app, uri);
+                CardZipImport.Bundle zip = null;
+                List<CardImport.Draft> drafts;
+                try (InputStream stream = app.getContentResolver().openInputStream(uri)) {
+                    if (stream == null) throw new IOException("无法读取所选文件。");
+                    BufferedInputStream input = new BufferedInputStream(stream);
+                    input.mark(4);
+                    boolean zipHeader = input.read() == 'P' && input.read() == 'K';
+                    input.reset();
+                    if (zipHeader) {
+                        zip = CardZipImport.read(input, app.getCacheDir());
+                        drafts = zip.drafts;
+                    } else {
+                        drafts = CardImport.readJson(input, false);
+                    }
+                } catch (IOException | RuntimeException error) {
+                    if (zip != null) zip.close();
+                    throw error;
+                }
+                CardZipImport.Bundle bundle = zip;
                 runOnUiThread(() -> {
                     if (isDestroyed() || !loading.isShowing()) {
-                        bundle.close();
+                        if (bundle != null) bundle.close();
                         return;
                     }
                     loading.dismiss();
                     if (state == null || !state.topics.containsKey(target.topicId())) {
-                        bundle.close();
+                        if (bundle != null) bundle.close();
                         notice("无法读取当前主题。");
                         return;
                     }
-                    List<CardImport.Draft> unique = CardImport.unique(state, target.topicId(), bundle.drafts);
+                    List<CardImport.Draft> unique = CardImport.unique(state, target.topicId(), drafts);
                     if (unique.isEmpty()) {
-                        bundle.close();
+                        if (bundle != null) bundle.close();
                         notice("这些卡片已在本主题中");
                         return;
                     }
                     reviewedZip = bundle;
-                    reviewImport(entry, target, unique, bundle.drafts.size() - unique.size(), bundle);
+                    reviewImport(entry, target, unique, drafts.size() - unique.size(), bundle);
                 });
             } catch (IOException | RuntimeException error) {
                 runOnUiThread(() -> {
@@ -661,21 +1094,70 @@ public final class MainActivity extends Activity {
         loading.setOnCancelListener(ignored -> task.cancel(true));
     }
 
-    private void copyImportPrompt(Discovery.Topic topic, Discovery.Source source) {
-        String prompt = "根据我随附的资料，为「" + topic.name + "」写适合手机锁屏阅读的发现卡片。"
-                + "每张写一件能在当下观察或尝试的发现，事实以材料所支持的内容为准。"
-                + "\n只输出 JSON 对象，不加 Markdown 代码围栏。结构示例："
-                + "\n{\"cards\":[{\"title\":\"标题\",\"body\":\"一条观察或发现\",\"task\":\"可选的小任务\"}]}"
-                + "\n每批最多 " + CardImport.MAX_CARDS + " 张。title 最多 " + Discovery.MAX_TITLE_LENGTH
-                + " 字符，body 最多 " + Discovery.MAX_BODY_LENGTH
-                + " 字符，task 可省略且最多 " + Discovery.MAX_TASK_LENGTH + " 字符。";
-        if (!topic.context.isEmpty()) prompt += "\n主题背景：" + topic.context;
-        if (source != null) {
-            prompt += "\n本批资料：" + source.label;
-            if (!source.url.isEmpty()) prompt += "\n" + source.url;
-        }
+    private void copyAgentPrompt(String prompt) {
         getSystemService(ClipboardManager.class).setPrimaryClip(ClipData.newPlainText("卡片生成提示", prompt));
         if (Build.VERSION.SDK_INT < 33) notice("已复制提示");
+    }
+
+    private void shareWithAgent(Button button, SourceSelection selection) {
+        List<Discovery.Source> sources = selection.sources();
+        String prompt = AgentShare.prompt(selection.topic(), sources, includeTopicNotes, customAgentNotes);
+        button.setEnabled(false);
+        Context app = getApplicationContext();
+        importWorker.execute(() -> {
+            try {
+                Intent intent = AgentShare.intent(app, prompt, sources);
+                List<AgentShare.Target> targets = AgentShare.targets(app, intent);
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    button.setEnabled(true);
+                    if (!button.isAttachedToWindow()) return;
+                    chooseAgent(intent, targets, prompt);
+                });
+            } catch (IOException error) {
+                runOnUiThread(() -> {
+                    if (isDestroyed()) return;
+                    button.setEnabled(true);
+                    if (button.isAttachedToWindow()) agentShareError(error.getMessage(), prompt);
+                });
+            }
+        });
+    }
+
+    private void chooseAgent(Intent share, List<AgentShare.Target> agents, String prompt) {
+        if (agents.isEmpty()) {
+            launchAgent(Intent.createChooser(share, "发给 Agent 生成卡片"), prompt);
+            return;
+        }
+        String[] choices = new String[agents.size() + 1];
+        for (int i = 0; i < agents.size(); i++) choices[i] = agents.get(i).label();
+        choices[agents.size()] = "其他应用 · 系统分享";
+        new AlertDialog.Builder(this).setTitle("发给 Agent 生成卡片")
+                .setItems(choices, (dialog, which) -> {
+                    Intent target = which == agents.size()
+                            ? Intent.createChooser(share, "发给 Agent 生成卡片")
+                            : new Intent(share).setPackage(agents.get(which).packageName());
+                    launchAgent(target, prompt);
+                })
+                .setNeutralButton("复制提示", (dialog, which) -> copyAgentPrompt(prompt))
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void launchAgent(Intent intent, String prompt) {
+        try {
+            startActivity(intent);
+        } catch (ActivityNotFoundException | SecurityException error) {
+            agentShareError("无法打开目标应用。", prompt);
+        }
+    }
+
+    private void agentShareError(String message, String prompt) {
+        new AlertDialog.Builder(this).setTitle("无法分享")
+                .setMessage(message)
+                .setNegativeButton("返回", null)
+                .setPositiveButton("复制提示", (dialog, which) -> copyAgentPrompt(prompt))
+                .show();
     }
 
     private void reviewImport(AlertDialog entry, ImportTarget target, List<CardImport.Draft> drafts,
@@ -721,7 +1203,7 @@ public final class MainActivity extends Activity {
                 return;
             }
             List<Discovery.Card> added = new ArrayList<>();
-            if (commit(latest -> added.addAll(CardImport.add(latest, target.topicId(), target.sourceId(), selected)))) {
+            if (commit(latest -> added.addAll(CardImport.add(latest, target.topicId(), target.sourceIds(), selected)))) {
                 finishImport(entry, review, added);
             }
         });
@@ -790,7 +1272,7 @@ public final class MainActivity extends Activity {
         Context app = getApplicationContext();
         importWorker.execute(() -> {
             try {
-                List<Discovery.Card> added = bundle.save(app, target.topicId(), target.sourceId(), selected);
+                List<Discovery.Card> added = bundle.save(app, target.topicId(), target.sourceIds(), selected);
                 bundle.close();
                 runOnUiThread(() -> {
                     if (isDestroyed()) return;
@@ -814,6 +1296,7 @@ public final class MainActivity extends Activity {
     private void finishImport(AlertDialog entry, AlertDialog review, List<Discovery.Card> added) {
         review.dismiss();
         if (entry != null) entry.dismiss();
+        if (importEntry != null && importEntry != entry) importEntry.dismiss();
         if (!added.isEmpty()) previewId = added.get(0).id;
         notice(added.isEmpty() ? "这些卡片已在本主题中" : "已导入 " + added.size() + " 张卡片");
         refresh(true);
@@ -823,7 +1306,7 @@ public final class MainActivity extends Activity {
         Log.w(WallpaperDelivery.TAG, "Could not import card bundle", error);
         String detail = error instanceof IOException ? error.getMessage() : null;
         new AlertDialog.Builder(this).setTitle("导入失败")
-                .setMessage(detail == null || detail.isEmpty() ? "无法读取或保存 ZIP。" : detail)
+                .setMessage(detail == null || detail.isEmpty() ? "无法读取或保存卡片文件。" : detail)
                 .setPositiveButton("返回", null).show();
     }
 
@@ -841,11 +1324,29 @@ public final class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
-        if (request == PICK_IMPORT_ZIP) {
-            ImportTarget target = pendingZip;
-            pendingZip = null;
+        if (request == PICK_PDF_BATCH) {
+            String topicId = pendingPdfTopic;
+            pendingPdfTopic = null;
+            if (topicId != null && result == RESULT_OK && data != null) importPdfBatch(topicId, data);
+            return;
+        }
+        if (request == PICK_SOURCE_PDF) {
+            restoreSourceEditor();
+            if (sourceDraft != null && result == RESULT_OK && data != null && data.getData() != null) {
+                Uri uri = data.getData();
+                sourceDraft.fileUri = uri.toString();
+                sourceDraft.filename = AgentShare.filename(this, uri);
+                sourceDraft.label.setText(sourceDraft.filename);
+                sourceDraft.label.setSelection(sourceDraft.label.length());
+                sourceDraft.showFile();
+            }
+            return;
+        }
+        if (request == PICK_CARD_FILE) {
+            ImportTarget target = pendingCardFile;
+            pendingCardFile = null;
             if (target != null && result == RESULT_OK && data != null && data.getData() != null) {
-                loadImportZip(importEntry, target, data.getData());
+                loadCardFile(importEntry, target, data.getData());
             }
             return;
         }
@@ -871,14 +1372,16 @@ public final class MainActivity extends Activity {
     }
 
     private void releaseUnused(String uri) {
-        if (uri.isEmpty() || state == null) return;
-        for (Discovery.Card card : state.cards.values()) {
-            if (uri.equals(card.photoUri) || uri.equals(card.audioUri)) return;
-        }
+        if (uri.isEmpty() || state == null || state.usesUri(uri)) return;
         if (draft != null && (uri.equals(draft.photoUri) || uri.equals(draft.audioUri))) return;
+        Uri parsed = Uri.parse(uri);
+        if ("file".equals(parsed.getScheme())) {
+            CardZipImport.releaseUnused(this, parsed);
+            return;
+        }
+        if (!"content".equals(parsed.getScheme())) return;
         try {
-            getContentResolver().releasePersistableUriPermission(
-                    Uri.parse(uri), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            getContentResolver().releasePersistableUriPermission(parsed, Intent.FLAG_GRANT_READ_URI_PERMISSION);
         } catch (SecurityException ignored) {
             // The provider can revoke a grant at any time.
         }
@@ -889,6 +1392,17 @@ public final class MainActivity extends Activity {
             startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(source.url)));
         } catch (ActivityNotFoundException error) {
             notice("系统没有可打开链接的应用");
+        }
+    }
+
+    private void openSourcePdf(Discovery.Source source) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW).setDataAndType(Uri.parse(source.fileUri), AgentShare.PDF)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION));
+        } catch (ActivityNotFoundException error) {
+            notice("系统没有可打开 PDF 的应用");
+        } catch (SecurityException error) {
+            notice("无法打开 PDF，请重新选择文件");
         }
     }
 
@@ -1032,17 +1546,23 @@ public final class MainActivity extends Activity {
     }
 
     private Button button(String label, Runnable action, boolean primary) {
+        return button(label, action, primary ? ACCENT : PREVIEW, primary ? BACKGROUND : TEXT);
+    }
+
+    private Button button(String label, Runnable action, int fill, int ink) {
         Button view = new Button(this);
         view.setText(label);
         view.setTextSize(14);
         view.setAllCaps(false);
         view.setTextColor(new ColorStateList(new int[][]{{-android.R.attr.state_enabled}, {}},
-                new int[]{0xff6b7c6b, primary ? BACKGROUND : TEXT}));
+                new int[]{fill == DELETE_ACCENT ? 0xff5c403b : 0xff6b7c6b, ink}));
         view.setMinimumHeight(dp(48));
         view.setPadding(dp(12), dp(8), dp(12), dp(8));
         view.setStateListAnimator(null);
         view.setBackground(new RippleDrawable(ColorStateList.valueOf(0x45899f78),
-                rounded(primary ? ACCENT : PREVIEW, 13), null));
+                rounded(fill == DELETE_ACCENT
+                        ? new ColorStateList(new int[][]{{-android.R.attr.state_enabled}, {}},
+                                new int[]{0xff46332e, fill}) : ColorStateList.valueOf(fill), 13), null));
         view.setOnClickListener(v -> action.run());
         return view;
     }
@@ -1058,6 +1578,10 @@ public final class MainActivity extends Activity {
     }
 
     private GradientDrawable rounded(int color, int radius) {
+        return rounded(ColorStateList.valueOf(color), radius);
+    }
+
+    private GradientDrawable rounded(ColorStateList color, int radius) {
         GradientDrawable background = new GradientDrawable();
         background.setColor(color);
         background.setCornerRadius(dp(radius));
