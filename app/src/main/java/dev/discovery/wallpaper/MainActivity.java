@@ -13,6 +13,7 @@ import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Bitmap;
+import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -29,12 +30,14 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
 import android.view.WindowManager;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -45,6 +48,7 @@ import java.io.BufferedInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -69,6 +73,7 @@ public final class MainActivity extends Activity {
     private static final int PICK_CARD_FILE = 4;
     private static final int PICK_SOURCE_PDF = 5;
     private static final int PICK_PDF_BATCH = 6;
+    private static final int SAVE_CARD_MEDIA = 7;
 
     private LinearLayout root;
     private LinearLayout content;
@@ -79,8 +84,8 @@ public final class MainActivity extends Activity {
     private boolean scheduleOk;
     private String previewId = "";
     private Bitmap previewBitmap;
-    private String previewKey = "";
-    private String pendingPreviewKey = "";
+    private PreviewKey previewKey;
+    private PreviewKey pendingPreviewKey;
     private ImageView previewView;
     private LinearLayout cardDetails;
     private Button nextCard;
@@ -97,6 +102,10 @@ public final class MainActivity extends Activity {
     private String pendingPdfTopic;
     private CardZipImport.Bundle reviewedZip;
     private CardDraft draft;
+    private Bundle restoreCardDraft;
+    private CardManager cardManager;
+    private String restoreManagerTopic;
+    private String pendingMediaExport = "";
     private SourceDraft sourceDraft;
     private Bundle restoreSourceDraft;
     private String importTopicId = "";
@@ -125,6 +134,9 @@ public final class MainActivity extends Activity {
                     new ImportTarget(topicId, saved.getStringArrayList("zipSources"));
             pendingPdfTopic = saved.getString("pendingPdfTopic");
             restoreSourceDraft = saved.getBundle("sourceDraft");
+            restoreCardDraft = saved.getBundle("cardDraft");
+            restoreManagerTopic = saved.getString("managedTopic");
+            pendingMediaExport = saved.getString("mediaExport", "");
             importTopicId = saved.getString("importTopic", "");
             ArrayList<String> selected = saved.getStringArrayList("importSources");
             if (selected != null) importSourceIds.addAll(selected);
@@ -169,6 +181,7 @@ public final class MainActivity extends Activity {
         super.onResume();
         refresh(true);
         restoreSourceEditor();
+        restoreCardUi();
     }
 
     @Override
@@ -180,6 +193,9 @@ public final class MainActivity extends Activity {
             out.putStringArrayList("zipSources", new ArrayList<>(pendingCardFile.sourceIds()));
         }
         if (sourceDraft != null) out.putBundle("sourceDraft", sourceDraft.snapshot());
+        if (draft != null) out.putBundle("cardDraft", draft.snapshot());
+        if (cardManager != null) out.putString("managedTopic", cardManager.topicId);
+        out.putString("mediaExport", pendingMediaExport);
         out.putString("pendingPdfTopic", pendingPdfTopic);
         out.putString("importTopic", importTopicId);
         out.putStringArrayList("importSources", new ArrayList<>(importSourceIds));
@@ -228,6 +244,7 @@ public final class MainActivity extends Activity {
         equal(nav, button("主题与资料", () -> changeTab(true), showTopics), 8);
         if (showTopics) topics();
         else cards();
+        if (cardManager != null) cardManager.update();
     }
 
     private void changeTab(boolean topics) {
@@ -381,6 +398,11 @@ public final class MainActivity extends Activity {
             top(details, button(card.audioUri.equals("sample") ? "播放合成音对比" : "播放音频",
                     () -> play(card.audioUri), false), 8);
         }
+        LinearLayout management = row();
+        top(details, management, 8);
+        equal(management, cardAction("编辑", ACCENT, () -> editCard(topic, card, null)), 0);
+        equal(management, cardAction("删除", DELETE_ACCENT,
+                () -> confirmCardDeletion(topic.id, Collections.singleton(card.id), null)), 8);
 
         updateCardActions();
     }
@@ -392,11 +414,13 @@ public final class MainActivity extends Activity {
         applyCard.setEnabled(!applying);
     }
 
+    private record PreviewKey(String cardId, Discovery.Artwork artwork, String topic, Size size) {}
+
     private void loadPreview(ImageView image, Discovery.Card card, String topic, Size size) {
         previewView = image;
-        String key = card.id + "|" + topic + "|" + size;
+        PreviewKey key = new PreviewKey(card.id, card.artwork(), topic, size);
         if (key.equals(previewKey)) {
-            pendingPreviewKey = "";
+            pendingPreviewKey = null;
             if (previewTask != null) previewTask.cancel(false);
             image.setImageBitmap(previewBitmap);
             return;
@@ -411,7 +435,7 @@ public final class MainActivity extends Activity {
                     bitmap.recycle();
                     return;
                 }
-                pendingPreviewKey = "";
+                pendingPreviewKey = null;
                 previewKey = key;
                 previewBitmap = bitmap;
                 if (previewView != null) previewView.setImageBitmap(bitmap);
@@ -465,7 +489,7 @@ public final class MainActivity extends Activity {
             LinearLayout actions = row();
             top(box, actions, 10);
             equal(actions, button("资料与备注", () -> topicDetails(topic), false), 0);
-            equal(actions, button("添加卡片", () -> chooseCardEntry(topic), false), 8);
+            equal(actions, button("管理卡片", () -> manageCards(topic), false), 8);
         }
         top(content, button("新建主题", this::newTopic, true), 14);
     }
@@ -624,10 +648,106 @@ public final class MainActivity extends Activity {
     private void chooseCardEntry(Discovery.Topic topic) {
         new AlertDialog.Builder(this).setTitle("添加卡片 · " + topic.name)
                 .setItems(new String[]{"手动添加卡片", "批量导入卡片"}, (dialog, which) -> {
-                    if (which == 0) addCard(topic);
+                    if (which == 0) editCard(topic, null, null);
                     else importCards(topic);
                 })
                 .setNegativeButton("取消", null).show();
+    }
+
+    private void manageCards(Discovery.Topic topic) {
+        cardManager = new CardManager(topic);
+        cardManager.update();
+    }
+
+    private final class CardManager {
+        final String topicId;
+        final ArrayList<Discovery.Card> cards = new ArrayList<>();
+        final ArrayAdapter<String> titles = new ArrayAdapter<>(MainActivity.this, android.R.layout.simple_list_item_1);
+        final Button delete;
+
+        CardManager(Discovery.Topic topic) {
+            topicId = topic.id;
+            LinearLayout content = fields();
+            LinearLayout actions = row();
+            top(content, actions, 0);
+            equal(actions, button("添加卡片", () -> {
+                Discovery.Topic current = state.topics.get(topicId);
+                if (current != null) chooseCardEntry(current);
+            }, true), 0);
+            delete = button("批量删除", () -> chooseCardsToDelete(topicId, new ArrayList<>(cards)),
+                    DELETE_ACCENT, BACKGROUND);
+            equal(actions, delete, 8);
+            TextView empty = gapText(content, "此主题还没有卡片。", 14, MUTED, false, 10);
+            ListView list = new ListView(MainActivity.this);
+            top(content, list, 8);
+            list.setAdapter(titles);
+            list.setEmptyView(empty);
+            list.setOnItemClickListener((parent, view, position, id) -> {
+                Discovery.Topic current = state.topics.get(topicId);
+                if (current != null) editCard(current, cards.get(position), null);
+            });
+            AlertDialog manager = new AlertDialog.Builder(MainActivity.this)
+                    .setTitle("管理卡片 · " + topic.name)
+                    .setView(content)
+                    .setPositiveButton("完成", null).show();
+            manager.setOnDismissListener(dialog -> {
+                if (cardManager == this) cardManager = null;
+            });
+        }
+
+        void update() {
+            cards.clear();
+            ArrayList<String> labels = new ArrayList<>();
+            for (Discovery.Card card : state.cards.values()) {
+                if (!topicId.equals(card.topicId)) continue;
+                cards.add(card);
+                labels.add(card.title);
+            }
+            titles.setNotifyOnChange(false);
+            titles.clear();
+            titles.addAll(labels);
+            titles.notifyDataSetChanged();
+            delete.setEnabled(!cards.isEmpty());
+        }
+    }
+
+    private void chooseCardsToDelete(String topicId, List<Discovery.Card> cards) {
+        String[] labels = cards.stream().map(card -> card.title).toArray(String[]::new);
+        Set<String> ids = new HashSet<>();
+        AlertDialog picker = new AlertDialog.Builder(this).setTitle("选择要删除的卡片")
+                .setMultiChoiceItems(labels, new boolean[labels.length], (dialog, index, on) -> {
+                    String id = cards.get(index).id;
+                    if (on) ids.add(id);
+                    else ids.remove(id);
+                    Button confirm = ((AlertDialog) dialog).getButton(AlertDialog.BUTTON_POSITIVE);
+                    confirm.setEnabled(!ids.isEmpty());
+                    confirm.setText(ids.isEmpty() ? "删除" : "删除 " + ids.size() + " 张");
+                }).setNegativeButton("取消", null).setPositiveButton("删除", null).show();
+        Button select = picker.getButton(AlertDialog.BUTTON_POSITIVE);
+        select.setEnabled(false);
+        select.setOnClickListener(view -> confirmCardDeletion(topicId, ids, picker));
+    }
+
+    private void confirmCardDeletion(String topicId, Set<String> ids, AlertDialog parent) {
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("删除 " + ids.size() + " 张卡片？")
+                .setMessage("删除后，这些卡片会从主题列表和壁纸轮换中移除。")
+                .setNegativeButton("取消", null).setPositiveButton("删除", null).show();
+        Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+        confirm.setTextColor(DELETE_ACCENT);
+        confirm.setOnClickListener(view -> {
+            List<Discovery.Card> removed = new ArrayList<>();
+            if (!commit(latest -> removed.addAll(latest.removeCards(topicId, ids)))) return;
+            stopAudio();
+            refresh(true);
+            dialog.dismiss();
+            if (parent != null) parent.dismiss();
+            for (Discovery.Card card : removed) {
+                releaseUnused(card.photoUri);
+                releaseUnused(card.audioUri);
+            }
+            notice("已删除 " + removed.size() + " 张卡片");
+        });
     }
 
     private boolean saveTopic(Discovery.Topic topic, EditText name, EditText notes) {
@@ -659,9 +779,11 @@ public final class MainActivity extends Activity {
         top(fields, button("选择 PDF 文件", () -> pick(AgentShare.PDF, PICK_SOURCE_PDF), false), 8);
         editing.pdf = gapText(fields, "", 14, TEXT, false, 8);
         Button remove = button("移除 PDF 附件", () -> {
+            String old = editing.fileUri;
             editing.fileUri = "";
             editing.filename = "";
             editing.showFile();
+            releaseUnused(old);
         }, false);
         editing.remove = remove;
         top(fields, remove, 8);
@@ -672,6 +794,7 @@ public final class MainActivity extends Activity {
         AlertDialog editor = dialog(existing == null ? "添加资料" : "编辑资料", fields);
         editor.setOnDismissListener(ignored -> {
             if (sourceDraft == editing) sourceDraft = null;
+            if (!isChangingConfigurations()) releaseUnused(editing.fileUri);
         });
         editor.setButton(AlertDialog.BUTTON_POSITIVE, "保存", (dialog, which) -> {});
         if (existing != null) {
@@ -720,8 +843,8 @@ public final class MainActivity extends Activity {
         String uri = editing.fileUri;
         runSourceWork("正在保存资料…",
                 app -> PdfSources.save(app, editing.topicId, id, label, url, uri), previousUri -> {
-            editor.dismiss();
             refresh(true);
+            editor.dismiss();
             releaseUnused(previousUri);
         });
     }
@@ -823,29 +946,41 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private void addCard(Discovery.Topic topic) {
+    private void editCard(Discovery.Topic topic, Discovery.Card existing, Bundle saved) {
         LinearLayout fields = fields();
-        EditText title = field(fields, "卡片标题", "", Discovery.MAX_TITLE_LENGTH, 1);
-        EditText body = field(fields, "观察或发现", "", Discovery.MAX_BODY_LENGTH, 4);
-        EditText task = field(fields, "可以马上做的小任务（可选）", "", Discovery.MAX_TASK_LENGTH, 2);
-        SourceSelection sources = sourcePicker(fields, topic, new ArrayList<>());
-
-        CardDraft editing = new CardDraft();
+        EditText title = field(fields, "卡片标题", cardField(saved, "title", existing == null ? "" : existing.title),
+                Discovery.MAX_TITLE_LENGTH, 1);
+        EditText body = field(fields, "观察或发现", cardField(saved, "body", existing == null ? "" : existing.body),
+                Discovery.MAX_BODY_LENGTH, 4);
+        EditText task = field(fields, "可以马上做的小任务（可选）",
+                cardField(saved, "task", existing == null ? "" : existing.task), Discovery.MAX_TASK_LENGTH, 2);
+        ArrayList<String> sourceIds = saved != null ? saved.getStringArrayList("sources")
+                : existing == null ? new ArrayList<>() : new ArrayList<>(existing.sourceIds);
+        sourceIds.removeIf(id -> topic.sources.stream().noneMatch(source -> source.id.equals(id)));
+        sourcePicker(fields, topic, sourceIds);
+        CardDraft editing = new CardDraft(topic.id, existing == null ? "" : existing.id, title, body, task, sourceIds);
+        editing.photoUri = cardField(saved, "photo", existing == null ? "" : existing.photoUri);
+        editing.audioUri = cardField(saved, "audio", existing == null ? "" : existing.audioUri);
         draft = editing;
-        editing.photo = button("添加图片", () -> pick("image/*", PICK_PHOTO), false);
-        editing.audio = button("添加音频", () -> pick("audio/*", PICK_AUDIO), false);
-        top(fields, editing.photo, 8);
-        top(fields, editing.audio, 8);
-        AlertDialog dialog = dialog("添加卡片 · " + topic.name, fields);
+        cardMediaControls(fields, editing, true);
+        cardMediaControls(fields, editing, false);
+        AlertDialog dialog = dialog((existing == null ? "添加卡片 · " : "编辑卡片 · ") + topic.name, fields);
         dialog.setButton(AlertDialog.BUTTON_POSITIVE, "保存", (dialogInterface, which) -> {});
+        if (existing != null) dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "删除卡片", (view, which) -> {});
         dialog.setOnDismissListener(ignored -> {
             if (draft == editing) draft = null;
-            if (!editing.saved) {
+            if (!isChangingConfigurations()) {
                 releaseUnused(editing.photoUri);
                 releaseUnused(editing.audioUri);
             }
         });
         dialog.show();
+        if (existing != null) {
+            Button delete = dialog.getButton(AlertDialog.BUTTON_NEUTRAL);
+            delete.setTextColor(DELETE_ACCENT);
+            delete.setOnClickListener(view ->
+                    confirmCardDeletion(topic.id, Collections.singleton(existing.id), dialog));
+        }
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
             if (value(title).isEmpty()) {
                 missing(title, "填写卡片标题");
@@ -855,16 +990,76 @@ public final class MainActivity extends Activity {
                 missing(body, "填写一条发现");
                 return;
             }
-            String id = uuid();
+            String id = existing == null ? uuid() : existing.id;
             Discovery.Card card = new Discovery.Card(id, topic.id, value(title), value(body), value(task),
-                    sources.ids, editing.photoUri, editing.audioUri, "forest");
-            if (commit(state -> state.cards.put(id, card))) {
-                editing.saved = true;
+                    sourceIds, editing.photoUri, editing.audioUri, existing == null ? "forest" : existing.palette);
+            if (commit(latest -> {
+                if (!latest.topics.containsKey(topic.id) || (existing != null && !latest.cards.containsKey(id))) {
+                    throw new IOException("卡片或主题已不存在。");
+                }
+                latest.cards.put(id, card);
+            })) {
                 previewId = id;
-                dialog.dismiss();
                 refresh(true);
+                dialog.dismiss();
+                if (existing != null) {
+                    releaseUnused(existing.photoUri);
+                    releaseUnused(existing.audioUri);
+                }
             }
         });
+    }
+
+    private static String cardField(Bundle saved, String key, String original) {
+        return saved == null ? original : saved.getString(key, original);
+    }
+
+    private void cardMediaControls(LinearLayout fields, CardDraft editing, boolean photo) {
+        String kind = photo ? "图片" : "音频";
+        Button pick = button("", () -> pick(photo ? "image/*" : "audio/*", photo ? PICK_PHOTO : PICK_AUDIO), false);
+        top(fields, pick, 8);
+        LinearLayout actions = row();
+        top(fields, actions, 2);
+        equal(actions, cardAction("保存" + kind + "到文件", ACCENT,
+                () -> exportCardMedia(value(editing.title), editing.media(photo), photo)), 0);
+        equal(actions, cardAction("移除" + kind, DELETE_ACCENT, () -> setCardMedia(editing, photo, "")), 8);
+        if (photo) {
+            editing.photo = pick;
+            editing.photoActions = actions;
+        } else {
+            editing.audio = pick;
+            editing.audioActions = actions;
+        }
+        editing.showMedia(photo);
+    }
+
+    private void setCardMedia(CardDraft editing, boolean photo, String uri) {
+        String previous = editing.media(photo);
+        if (photo) editing.photoUri = uri;
+        else editing.audioUri = uri;
+        editing.showMedia(photo);
+        if (!previous.equals(uri)) releaseUnused(previous);
+    }
+
+    private void restoreCardUi() {
+        if (restoreManagerTopic == null && restoreCardDraft == null) return;
+        String managerTopic = restoreManagerTopic;
+        Bundle saved = restoreCardDraft;
+        restoreManagerTopic = null;
+        restoreCardDraft = null;
+        if (state == null) refresh(true);
+        if (state == null) return;
+        Discovery.Topic manager = state.topics.get(managerTopic);
+        if (manager != null) manageCards(manager);
+        if (saved == null) return;
+        Discovery.Topic topic = state.topics.get(saved.getString("topic"));
+        String id = saved.getString("id", "");
+        Discovery.Card existing = state.cards.get(id);
+        if (topic != null && (id.isEmpty() || existing != null)) editCard(topic, existing, saved);
+        else {
+            releaseUnused(saved.getString("photo", ""));
+            releaseUnused(saved.getString("audio", ""));
+        }
     }
 
     private SourceSelection sourcePicker(LinearLayout fields, Discovery.Topic topic, ArrayList<String> ids) {
@@ -1321,9 +1516,54 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void exportCardMedia(String title, String media, boolean photo) {
+        if (media.isEmpty()) return;
+        try {
+            Intent intent = CardMediaExport.destination(this, title, media, photo);
+            pendingMediaExport = media;
+            startActivityForResult(intent, SAVE_CARD_MEDIA);
+        } catch (ActivityNotFoundException error) {
+            pendingMediaExport = "";
+            notice("系统文件选择器不可用");
+        } catch (RuntimeException error) {
+            pendingMediaExport = "";
+            notice("无法读取卡片媒体。");
+        }
+    }
+
+    private void saveCardMedia(String media, Uri destination) {
+        AlertDialog saving = new AlertDialog.Builder(this).setMessage("正在保存媒体…")
+                .setCancelable(false).show();
+        Context app = getApplicationContext();
+        importWorker.execute(() -> {
+            String result = "已保存到所选位置";
+            try {
+                CardMediaExport.copy(app, media, destination);
+            } catch (IOException | RuntimeException error) {
+                Log.w(WallpaperDelivery.TAG, "Could not export card media", error);
+                result = "无法保存媒体，请检查文件和保存位置。";
+            }
+            String message = result;
+            runOnUiThread(() -> {
+                if (isDestroyed()) return;
+                saving.dismiss();
+                notice(message);
+            });
+        });
+    }
+
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == SAVE_CARD_MEDIA) {
+            String media = pendingMediaExport;
+            pendingMediaExport = "";
+            if (!media.isEmpty() && result == RESULT_OK && data != null && data.getData() != null) {
+                restoreCardUi();
+                saveCardMedia(media, data.getData());
+            }
+            return;
+        }
         if (request == PICK_PDF_BATCH) {
             String topicId = pendingPdfTopic;
             pendingPdfTopic = null;
@@ -1334,11 +1574,23 @@ public final class MainActivity extends Activity {
             restoreSourceEditor();
             if (sourceDraft != null && result == RESULT_OK && data != null && data.getData() != null) {
                 Uri uri = data.getData();
-                sourceDraft.fileUri = uri.toString();
-                sourceDraft.filename = AgentShare.filename(this, uri);
-                sourceDraft.label.setText(sourceDraft.filename);
-                sourceDraft.label.setSelection(sourceDraft.label.length());
-                sourceDraft.showFile();
+                try {
+                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    String old = sourceDraft.fileUri;
+                    String currentLabel = value(sourceDraft.label);
+                    boolean autofill = sourceDraft.existing == null
+                            && (currentLabel.isEmpty() || currentLabel.equals(sourceDraft.filename));
+                    sourceDraft.fileUri = uri.toString();
+                    sourceDraft.filename = AgentShare.filename(this, uri);
+                    if (autofill) {
+                        sourceDraft.label.setText(sourceDraft.filename);
+                        sourceDraft.label.setSelection(sourceDraft.label.length());
+                    }
+                    sourceDraft.showFile();
+                    if (!old.equals(sourceDraft.fileUri)) releaseUnused(old);
+                } catch (SecurityException error) {
+                    notice("无法保留 PDF 访问权限，请重新选择文件。");
+                }
             }
             return;
         }
@@ -1350,22 +1602,13 @@ public final class MainActivity extends Activity {
             }
             return;
         }
-        if (draft == null || result != RESULT_OK || data == null || data.getData() == null) return;
         if (request != PICK_PHOTO && request != PICK_AUDIO) return;
+        restoreCardUi();
+        if (draft == null || result != RESULT_OK || data == null || data.getData() == null) return;
         Uri uri = data.getData();
         try {
             getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            String old;
-            if (request == PICK_PHOTO) {
-                old = draft.photoUri;
-                draft.photoUri = uri.toString();
-                draft.photo.setText("已选图片 · 更换");
-            } else {
-                old = draft.audioUri;
-                draft.audioUri = uri.toString();
-                draft.audio.setText("已选音频 · 更换");
-            }
-            if (!old.equals(uri.toString())) releaseUnused(old);
+            setCardMedia(draft, request == PICK_PHOTO, uri.toString());
         } catch (SecurityException error) {
             notice("这个文件无法保留访问权限，请选择设备上的文件。");
         }
@@ -1374,6 +1617,8 @@ public final class MainActivity extends Activity {
     private void releaseUnused(String uri) {
         if (uri.isEmpty() || state == null || state.usesUri(uri)) return;
         if (draft != null && (uri.equals(draft.photoUri) || uri.equals(draft.audioUri))) return;
+        if (sourceDraft != null && uri.equals(sourceDraft.fileUri)) return;
+        if (uri.equals(pendingMediaExport)) return;
         Uri parsed = Uri.parse(uri);
         if ("file".equals(parsed.getScheme())) {
             CardZipImport.releaseUnused(this, parsed);
@@ -1519,11 +1764,52 @@ public final class MainActivity extends Activity {
     }
 
     private static final class CardDraft {
+        final String topicId;
+        final String id;
+        final EditText title;
+        final EditText body;
+        final EditText task;
+        final ArrayList<String> sourceIds;
         String photoUri = "";
         String audioUri = "";
         Button photo;
         Button audio;
-        boolean saved;
+        LinearLayout photoActions;
+        LinearLayout audioActions;
+
+        CardDraft(String topicId, String id, EditText title, EditText body, EditText task,
+                  ArrayList<String> sourceIds) {
+            this.topicId = topicId;
+            this.id = id;
+            this.title = title;
+            this.body = body;
+            this.task = task;
+            this.sourceIds = sourceIds;
+        }
+
+        String media(boolean image) {
+            return image ? photoUri : audioUri;
+        }
+
+        void showMedia(boolean image) {
+            String kind = image ? "图片" : "音频";
+            boolean present = !media(image).isEmpty();
+            (image ? photo : audio).setText((present ? "更换" : "添加") + kind);
+            (image ? photoActions : audioActions).setVisibility(present ? View.VISIBLE : View.GONE);
+        }
+
+        Bundle snapshot() {
+            Bundle saved = new Bundle();
+            saved.putString("topic", topicId);
+            saved.putString("id", id);
+            saved.putString("title", value(title));
+            saved.putString("body", value(body));
+            saved.putString("task", value(task));
+            saved.putStringArrayList("sources", new ArrayList<>(sourceIds));
+            saved.putString("photo", photoUri);
+            saved.putString("audio", audioUri);
+            return saved;
+        }
     }
 
     private LinearLayout panel(LinearLayout parent, int margin) {
@@ -1547,6 +1833,14 @@ public final class MainActivity extends Activity {
 
     private Button button(String label, Runnable action, boolean primary) {
         return button(label, action, primary ? ACCENT : PREVIEW, primary ? BACKGROUND : TEXT);
+    }
+
+    private Button cardAction(String label, int ink, Runnable action) {
+        Button view = button(label, action, false);
+        view.setTextColor(ink);
+        view.setBackground(new RippleDrawable(ColorStateList.valueOf(0x45899f78),
+                rounded(Color.TRANSPARENT, 13), rounded(0xffffffff, 13)));
+        return view;
     }
 
     private Button button(String label, Runnable action, int fill, int ink) {

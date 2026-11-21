@@ -8,6 +8,7 @@ public final class RotationCheck {
     public static void main(String[] args) {
         checkSourceRemoval();
         checkTopicRemoval();
+        checkCardRemoval();
         Discovery.State state = SampleCards.create();
         require(!state.automatic, "automatic changes require opt-in");
         require(state.minutes == 30, "default interval");
@@ -44,6 +45,22 @@ public final class RotationCheck {
         require(state.next("timbre") == null, "no eligible deliveries");
         require(state.browse("timbre") == null, "empty preview");
         System.out.println("RotationCheck passed");
+    }
+
+    private static void checkCardRemoval() {
+        Discovery.State state = SampleCards.create();
+        Discovery.Card drum = state.cards.get("drum");
+        state.applied(drum, 2000);
+        Discovery.Card edited = new Discovery.Card(drum.id, drum.topicId, "Edited", drum.body,
+                drum.task, drum.sourceIds, drum.photoUri, drum.audioUri, drum.palette);
+        require(!drum.artwork().equals(edited.artwork()), "edited text refreshes the artwork");
+        state.cards.put(drum.id, edited);
+        require(state.lastShown.containsKey(drum.id), "editing keeps card history");
+        Set<String> selected = new HashSet<>(Arrays.asList("drum", "yellow"));
+        require(state.removeCards("birds", selected).size() == 1, "card deletion is scoped to a topic");
+        require(state.cards.containsKey("yellow") && state.topics.containsKey("birds"), "other records are preserved");
+        require(!state.lastShown.containsKey(drum.id) && state.lastCardId.isEmpty(), "deleted card leaves rotation");
+        require(state.eligible(drum.id) == null, "deleted card cannot be applied");
     }
 
     private static void checkTopicRemoval() {

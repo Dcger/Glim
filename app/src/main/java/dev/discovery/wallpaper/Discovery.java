@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 
 final class Discovery {
     static final int DEFAULT_MINUTES = 30;
@@ -82,7 +83,13 @@ final class Discovery {
             this.audioUri = audioUri;
             this.palette = palette;
         }
+
+        Artwork artwork() {
+            return new Artwork(title, body, task, photoUri, palette);
+        }
     }
+
+    record Artwork(String title, String body, String task, String photoUri, String palette) {}
 
     static final class State {
         final Map<String, Topic> topics = new LinkedHashMap<>();
@@ -171,10 +178,21 @@ final class Discovery {
             Topic removed = topics.remove(topicId);
             if (removed == null) return;
             for (Source source : removed.sources) releasedUris.add(source.fileUri);
-            cards.values().removeIf(card -> {
-                if (!card.topicId.equals(topicId)) return false;
+            for (Card card : removeCards(topicId, card -> true)) {
                 releasedUris.add(card.photoUri);
                 releasedUris.add(card.audioUri);
+            }
+        }
+
+        List<Card> removeCards(String topicId, Set<String> ids) {
+            return removeCards(topicId, card -> ids.contains(card.id));
+        }
+
+        private List<Card> removeCards(String topicId, Predicate<Card> selected) {
+            List<Card> removed = new ArrayList<>();
+            cards.values().removeIf(card -> {
+                if (!card.topicId.equals(topicId) || !selected.test(card)) return false;
+                removed.add(card);
                 lastShown.remove(card.id);
                 if (card.id.equals(lastCardId)) {
                     lastCardId = "";
@@ -183,6 +201,7 @@ final class Discovery {
                 }
                 return true;
             });
+            return removed;
         }
 
         boolean usesUri(String uri) {

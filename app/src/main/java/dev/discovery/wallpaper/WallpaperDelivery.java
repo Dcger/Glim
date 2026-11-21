@@ -61,19 +61,21 @@ final class WallpaperDelivery {
             if (!wallpaper.isWallpaperSupported() || !wallpaper.isSetWallpaperAllowed()) {
                 throw new IOException("系统当前禁止设置壁纸");
             }
-            bitmap = WallpaperArt.render(context, candidate,
-                    snapshot.topics.get(candidate.topicId).name, WallpaperArt.dimensions(context, 1440));
+            String topicName = snapshot.topics.get(candidate.topicId).name;
+            bitmap = WallpaperArt.render(context, candidate, topicName, WallpaperArt.dimensions(context, 1440));
             Bitmap image = bitmap;
             boolean[] applied = {false};
             Store.edit(context, state -> {
-                if (cancelled.getAsBoolean() || !trigger.allowed(state)
-                        || state.eligible(candidate.id) == null) return;
+                Discovery.Card latest = state.eligible(candidate.id);
+                if (cancelled.getAsBoolean() || !trigger.allowed(state) || latest == null
+                        || !latest.artwork().equals(candidate.artwork())
+                        || !state.topics.get(latest.topicId).name.equals(topicName)) return;
                 int wallpaperId = wallpaper.setBitmap(image, null, false, WallpaperManager.FLAG_LOCK);
                 if (wallpaperId <= 0) {
                     throw new IOException("系统未返回锁屏壁纸 ID");
                 }
                 applied[0] = true;
-                state.applied(candidate, System.currentTimeMillis());
+                state.applied(latest, System.currentTimeMillis());
                 Log.i(TAG, trigger + " applied card=" + candidate.id + " wallpaperId=" + wallpaperId);
             });
             return applied[0] ? APPLIED : "";

@@ -40,6 +40,11 @@ final class AgentShare {
     }
 
     static String filename(Context context, Uri uri) {
+        String name = displayName(context, uri);
+        return name.isEmpty() ? "本地 PDF" : name;
+    }
+
+    static String displayName(Context context, Uri uri) {
         try (Cursor cursor = context.getContentResolver().query(uri,
                 new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst() && cursor.getColumnCount() > 0) {
@@ -49,7 +54,7 @@ final class AgentShare {
         } catch (RuntimeException ignored) {
             // Some providers omit a display name.
         }
-        return "本地 PDF";
+        return "";
     }
 
     static String prompt(Discovery.Topic topic, List<Discovery.Source> sources,
