@@ -2,7 +2,11 @@ package dev.discovery.wallpaper;
 
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.Color;
+import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import java.io.IOException;
@@ -18,7 +22,85 @@ import java.util.UUID;
 final class PdfSources {
     record Result(int added, int duplicates, int failed, String exampleFailure) {}
 
+    record Page(Bitmap bitmap, int total) {}
+
+    static Page renderPage(Context app, String uri, int number) throws IOException {
+        ParcelFileDescriptor file;
+        try {
+            file = app.getContentResolver().openFileDescriptor(Uri.parse(uri), "r");
+        } catch (IOException | RuntimeException error) {
+            throw new IOException("无法读取 PDF，请检查附件。", error);
+        }
+        if (file == null) throw new IOException("无法读取 PDF，请检查附件。");
+
+        PdfRenderer renderer;
+        try {
+            renderer = new PdfRenderer(file);
+        } catch (IOException | RuntimeException error) {
+            try {
+                file.close();
+            } catch (IOException closeError) {
+                error.addSuppressed(closeError);
+            }
+            throw new IOException("无法在应用内预览这份 PDF，可用阅读器打开。", error);
+        }
+        try (PdfRenderer pdf = renderer) {
+            int total = pdf.getPageCount();
+            if (number < 1 || number > total) {
+                throw new IOException("PDF 共 " + total + " 页，引用页码 " + number + " 超出范围。");
+            }
+            try (PdfRenderer.Page page = pdf.openPage(number - 1)) {
+                float scale = Math.min(1600f / page.getWidth(), 2200f / page.getHeight());
+                Bitmap image = Bitmap.createBitmap(Math.max(1, Math.round(page.getWidth() * scale)),
+                        Math.max(1, Math.round(page.getHeight() * scale)), Bitmap.Config.ARGB_8888);
+                image.eraseColor(Color.WHITE);
+                try {
+                    page.render(image, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                    return new Page(image, total);
+                } catch (RuntimeException error) {
+                    image.recycle();
+                    throw error;
+                }
+            }
+        } catch (RuntimeException error) {
+            throw new IOException("无法显示 PDF 第 " + number + " 页，可用阅读器打开。", error);
+        }
+    }
+
     private record Candidate(String label, String uri) {}
+
+    static String relink(Context app, String topicId, String sourceId, Uri picked) throws IOException {
+        String uri = picked.toString();
+        Discovery.Topic snapshot = topic(Store.read(app), topicId);
+        Discovery.Source before = source(snapshot, sourceId);
+        if (before.fileUri.isEmpty()) throw new IOException("这份资料已移除 PDF 附件。");
+        Map<String, String> hashes = index(app, snapshot);
+        hashes.remove(uri);
+        String fingerprint = hash(app, uri, hashes);
+        List<String> granted = new ArrayList<>();
+        try {
+            Store.edit(app, state -> {
+                Discovery.Topic current = topic(state, topicId);
+                Discovery.Source previous = source(current, sourceId);
+                if (!before.fileUri.equals(previous.fileUri) || !before.pdfHash.equals(previous.pdfHash)) {
+                    throw new IOException("资料已变更，请重新检查附件。");
+                }
+                if (!previous.pdfHash.isEmpty() && !previous.pdfHash.equals(fingerprint)) {
+                    throw new IOException("选中的 PDF 与原文件内容不同。请重新选择原 PDF，以保留页码定位。");
+                }
+                if (duplicate(current, sourceId, uri, fingerprint, hashes)) {
+                    throw new IOException("此 PDF 已关联本主题中的另一份资料。");
+                }
+                retain(app, uri, granted);
+                current.sources.set(current.sources.indexOf(previous),
+                        new Discovery.Source(sourceId, previous.label, previous.url, uri, fingerprint));
+            });
+        } catch (IOException error) {
+            releaseFailed(app, granted);
+            throw error;
+        }
+        return before.fileUri.equals(uri) ? "" : before.fileUri;
+    }
 
     static String save(Context app, String topicId, String existingId, String label, String url, String uri)
             throws IOException {

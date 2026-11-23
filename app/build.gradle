@@ -10,8 +10,8 @@ android {
         applicationId 'dev.discovery.wallpaper'
         minSdk 24
         targetSdk 35
-        versionCode 8
-        versionName '0.2.5'
+        versionCode 23
+        versionName '0.2.20'
     }
 
     compileOptions {

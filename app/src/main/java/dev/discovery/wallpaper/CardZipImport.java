@@ -15,7 +15,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -45,14 +44,14 @@ final class CardZipImport {
             return Uri.fromFile(files.get(path)).toString();
         }
 
-        List<Discovery.Card> save(Context app, String topicId, List<String> sourceIds,
+        CardImport.Result save(Context app, String topicId, List<String> sourceIds,
                                   List<CardImport.Draft> selected) throws IOException {
             File destination = new File(app.getFilesDir(), "card-media-" + UUID.randomUUID());
             Map<String, String> stored = new HashMap<>();
-            List<Discovery.Card> added = new ArrayList<>();
+            CardImport.Result[] result = new CardImport.Result[1];
             boolean committed = false;
             try {
-                Store.edit(app, state -> added.addAll(CardImport.add(state, topicId, sourceIds, selected,
+                Store.edit(app, state -> result[0] = CardImport.add(state, topicId, sourceIds, selected,
                         path -> {
                             String previous = stored.get(path);
                             if (previous != null) return previous;
@@ -70,9 +69,9 @@ final class CardZipImport {
                             String uri = Uri.fromFile(saved).toString();
                             stored.put(path, uri);
                             return uri;
-                        })));
+                        }));
                 committed = true;
-                return added;
+                return result[0];
             } finally {
                 if (!committed) remove(destination);
             }

@@ -44,7 +44,7 @@ public final class RotationTestService extends Service {
             startForeground(NOTIFICATION_ID, notification());
             PowerManager power = getSystemService(PowerManager.class);
             wakeLock = power.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,
-                    "DiscoveryWallpaper:RotationTest");
+                    "Glim:RotationTest");
             wakeLock.setReferenceCounted(false);
             wakeLock.acquire(DURATION_MS);
             deadline = SystemClock.elapsedRealtime() + DURATION_MS;

@@ -16,7 +16,7 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/ic_discovery"
+        android:icon="@drawable/ic_glim"
         android:label="@string/app_name"
         android:theme="@style/AppTheme">
         <activity
@@ -28,10 +28,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <service
-            android:name=".RotationJob"
-            android:exported="true"
-            android:permission="android.permission.BIND_JOB_SERVICE" />
+        <provider
+            android:name=".RestoredPdfProvider"
+            android:authorities="${applicationId}.restored-pdfs"
+            android:exported="false"
+            android:grantUriPermissions="true" />
+        <receiver android:name=".RotationAlarm" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <service
             android:name=".RotationTestService"
             android:exported="false"

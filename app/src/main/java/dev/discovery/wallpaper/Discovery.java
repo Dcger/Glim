@@ -3,8 +3,10 @@ package dev.discovery.wallpaper;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.Set;
 import java.util.function.Predicate;
 
@@ -14,6 +16,7 @@ final class Discovery {
     static final int MAX_TITLE_LENGTH = 42;
     static final int MAX_BODY_LENGTH = 155;
     static final int MAX_TASK_LENGTH = 70;
+    static final int RECENT_LIMIT = 5;
 
     static final class Topic {
         final String id;
@@ -26,6 +29,13 @@ final class Discovery {
             this.id = id;
             this.name = name;
             this.enabled = enabled;
+        }
+
+        Source source(String id) {
+            for (Source entry : sources) {
+                if (entry.id.equals(id)) return entry;
+            }
+            return null;
         }
     }
 
@@ -63,6 +73,7 @@ final class Discovery {
         final String photoUri;
         final String audioUri;
         final String palette;
+        final References references;
 
         Card(String id, String topicId, String title, String body, String task,
              String sourceId, String photoUri, String audioUri, String palette) {
@@ -73,6 +84,11 @@ final class Discovery {
 
         Card(String id, String topicId, String title, String body, String task,
              List<String> sourceIds, String photoUri, String audioUri, String palette) {
+            this(id, topicId, title, body, task, sourceIds, photoUri, audioUri, palette, References.EMPTY);
+        }
+
+        Card(String id, String topicId, String title, String body, String task,
+             List<String> sourceIds, String photoUri, String audioUri, String palette, References references) {
             this.id = id;
             this.topicId = topicId;
             this.title = title;
@@ -82,6 +98,7 @@ final class Discovery {
             this.photoUri = photoUri;
             this.audioUri = audioUri;
             this.palette = palette;
+            this.references = references;
         }
 
         Artwork artwork() {
@@ -89,56 +106,168 @@ final class Discovery {
         }
     }
 
+    record Citation(String sourceId, String locator) {}
+
+    record Concept(String term, String explanation, List<Citation> citations) {
+        Concept {
+            citations = Collections.unmodifiableList(new ArrayList<>(citations));
+        }
+    }
+
+    record References(List<Citation> citations, List<Concept> concepts) {
+        static final References EMPTY = new References(Collections.emptyList(), Collections.emptyList());
+
+        References {
+            citations = Collections.unmodifiableList(new ArrayList<>(citations));
+            concepts = Collections.unmodifiableList(new ArrayList<>(concepts));
+        }
+
+        Set<String> sourceIds() {
+            Set<String> ids = new LinkedHashSet<>();
+            for (Citation citation : citations) ids.add(citation.sourceId());
+            for (Concept concept : concepts) {
+                for (Citation citation : concept.citations()) ids.add(citation.sourceId());
+            }
+            return ids;
+        }
+
+        References withoutSources(Set<String> removed) {
+            List<Concept> remaining = new ArrayList<>();
+            for (Concept concept : concepts) {
+                remaining.add(new Concept(concept.term(), concept.explanation(), keep(concept.citations(), removed)));
+            }
+            return new References(keep(citations, removed), remaining);
+        }
+
+        private static List<Citation> keep(List<Citation> citations, Set<String> removed) {
+            List<Citation> remaining = new ArrayList<>(citations);
+            remaining.removeIf(citation -> removed.contains(citation.sourceId()));
+            return remaining;
+        }
+    }
+
     record Artwork(String title, String body, String task, String photoUri, String palette) {}
+
+    record LockEntry(String cardId, String title, String topic, long appliedAt, String image) {}
 
     static final class State {
         final Map<String, Topic> topics = new LinkedHashMap<>();
         final Map<String, Card> cards = new LinkedHashMap<>();
         final Map<String, Long> lastShown = new LinkedHashMap<>();
+        final List<LockEntry> recentLocks = new ArrayList<>();
+        final Set<String> shuffledLocks = new LinkedHashSet<>();
+        final Set<String> disabledCards = new LinkedHashSet<>();
         String lastCardId = "";
         long lastAppliedAt;
+        long nextRotationAt;
         long sequence;
         String status = "";
         boolean automatic;
+        boolean randomRotation;
+        boolean randomBrowse;
         int minutes = DEFAULT_MINUTES;
 
         Card eligible(String cardId) {
             Card card = cards.get(cardId);
             Topic topic = card == null ? null : topics.get(card.topicId);
-            return topic != null && topic.enabled ? card : null;
+            return topic != null && topic.enabled && cardEnabled(cardId) ? card : null;
         }
 
-        Card next(String afterId) {
-            Card next = null;
-            long oldest = Long.MAX_VALUE;
-            for (Card card : cards.values()) {
-                if (eligible(card.id) == null || card.id.equals(afterId)) continue;
-                long rank = lastShown.getOrDefault(card.id, 0L);
-                if (next == null || rank < oldest) {
-                    next = card;
-                    oldest = rank;
-                }
+        boolean cardEnabled(String cardId) {
+            return !disabledCards.contains(cardId);
+        }
+
+        void setCardEnabled(String cardId, boolean enabled) {
+            if (!cards.containsKey(cardId)) return;
+            if (enabled) {
+                disabledCards.remove(cardId);
+            } else {
+                disabledCards.add(cardId);
+                shuffledLocks.remove(cardId);
             }
-            return next == null ? eligible(afterId) : next;
+        }
+
+        Card next(Random random) {
+            return randomRotation ? shuffled(lastCardId, shuffledLocks, random) : browse(lastCardId);
+        }
+
+        Card nextPreview(String afterId, Set<String> shown, Random random) {
+            return randomBrowse ? shuffled(afterId, shown, random) : browse(afterId);
+        }
+
+        private Card shuffled(String afterId, Set<String> shown, Random random) {
+            List<Card> available = new ArrayList<>();
+            List<Card> unseen = new ArrayList<>();
+            for (Card card : cards.values()) {
+                if (card.id.equals(afterId) || eligible(card.id) == null) continue;
+                available.add(card);
+                if (!shown.contains(card.id)) unseen.add(card);
+            }
+            List<Card> choices = unseen.isEmpty() ? available : unseen;
+            return choices.isEmpty() ? eligible(afterId) : choices.get(random.nextInt(choices.size()));
+        }
+
+        void rememberShuffle(Set<String> shown, String previous, String selected) {
+            shown.removeIf(id -> eligible(id) == null);
+            if (selected.equals(previous)) {
+                if (eligible(selected) != null) shown.add(selected);
+                return;
+            }
+            if (shown.contains(selected)) shown.clear();
+            else if (eligible(previous) != null) shown.add(previous);
+            if (eligible(selected) != null) shown.add(selected);
         }
 
         Card browse(String afterId) {
             Card first = null;
             boolean returnNext = false;
             for (Card card : cards.values()) {
-                if (eligible(card.id) == null) continue;
-                if (first == null) first = card;
-                if (returnNext) return card;
+                if (eligible(card.id) != null) {
+                    if (first == null) first = card;
+                    if (returnNext) return card;
+                }
                 if (card.id.equals(afterId)) returnNext = true;
             }
             return first;
         }
 
-        void applied(Card card, long timestamp) {
-            lastShown.put(card.id, ++sequence);
-            lastCardId = card.id;
-            lastAppliedAt = timestamp;
+        long rotationIntervalMs() {
+            return Math.max(INTERVALS[0], minutes) * 60_000L;
+        }
+
+        void configureRotation(boolean enabled, int interval, long now) {
+            if (automatic == enabled && minutes == interval) return;
+            automatic = enabled;
+            minutes = interval;
+            nextRotationAt = enabled ? now + rotationIntervalMs() : 0;
+        }
+
+        boolean rotationDue(long now) {
+            return automatic && nextRotationAt > 0 && now >= nextRotationAt;
+        }
+
+        void applied(LockEntry entry, boolean rotated) {
+            String id = entry.cardId();
+            if (randomRotation) {
+                if (rotated) rememberShuffle(shuffledLocks, lastCardId, id);
+                else if (eligible(id) != null) shuffledLocks.add(id);
+            }
+            sequence++;
+            if (cards.containsKey(id)) lastShown.put(id, sequence);
+            lastCardId = id;
+            lastAppliedAt = entry.appliedAt();
+            if (automatic) nextRotationAt = lastAppliedAt + rotationIntervalMs();
+            recentLocks.add(0, entry);
+            if (recentLocks.size() > RECENT_LIMIT) recentLocks.remove(RECENT_LIMIT);
             status = "";
+        }
+
+        void restoreLegacyLock() {
+            Card card = cards.get(lastCardId);
+            Topic topic = card == null ? null : topics.get(card.topicId);
+            if (topic != null && recentLocks.isEmpty() && lastAppliedAt > 0) {
+                recentLocks.add(new LockEntry(card.id, card.title, topic.name, lastAppliedAt, ""));
+            }
         }
 
         List<Source> sources(Card card) {
@@ -163,13 +292,14 @@ final class Discovery {
                 return true;
             });
             cards.replaceAll((id, card) -> {
-                if (!topicId.equals(card.topicId) || Collections.disjoint(card.sourceIds, ids)) {
+                if (!topicId.equals(card.topicId) || (Collections.disjoint(card.sourceIds, ids)
+                        && Collections.disjoint(card.references.sourceIds(), ids))) {
                     return card;
                 }
                 List<String> remaining = new ArrayList<>(card.sourceIds);
                 remaining.removeAll(ids);
                 return new Card(card.id, card.topicId, card.title, card.body, card.task, remaining,
-                        card.photoUri, card.audioUri, card.palette);
+                        card.photoUri, card.audioUri, card.palette, card.references.withoutSources(ids));
             });
             return removed;
         }
@@ -194,6 +324,8 @@ final class Discovery {
                 if (!card.topicId.equals(topicId) || !selected.test(card)) return false;
                 removed.add(card);
                 lastShown.remove(card.id);
+                shuffledLocks.remove(card.id);
+                disabledCards.remove(card.id);
                 if (card.id.equals(lastCardId)) {
                     lastCardId = "";
                     lastAppliedAt = 0;

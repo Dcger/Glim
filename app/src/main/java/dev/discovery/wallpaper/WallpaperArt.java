@@ -10,7 +10,6 @@ import android.graphics.LinearGradient;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RadialGradient;
-import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Shader;
 import android.graphics.Typeface;
@@ -55,37 +54,85 @@ final class WallpaperArt {
         canvas.scale(scale, scale);
         float width = 1080;
         float height = outputHeight / scale;
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         Bitmap photo = readPhoto(context, card.photoUri, outputWidth, outputHeight);
-        if (photo == null) {
-            backdrop(canvas, paint, card.palette, width, height);
-        } else {
-            crop(canvas, photo, paint, width, height);
-            photo.recycle();
+        try {
+            if (photo == null) drawBackdrop(canvas, card.palette, width, height);
+            else {
+                canvas.drawColor(INK);
+                drawImage(canvas, photo, width, height);
+            }
+            drawOverlay(canvas, card, topic, width, height, photo != null);
+        } finally {
+            if (photo != null) photo.recycle();
         }
-        paint.setShader(new LinearGradient(0, 0, 0, height,
-                new int[]{0x7108100b, 0x0008100b, 0x2008100b, 0xe50c150e, INK, INK},
-                new float[]{0, .25f, .44f, .64f, .84f, 1}, Shader.TileMode.CLAMP));
-        canvas.drawRect(0, 0, width, height, paint);
+        return bitmap;
+    }
 
+    static void drawBackdrop(Canvas canvas, String palette, float width, float height) {
+        backdrop(canvas, new Paint(Paint.ANTI_ALIAS_FLAG), palette, width, height);
+    }
+
+    private static void drawImage(Canvas canvas, Bitmap photo, float width, float height) {
+        float scale = Math.max(width / photo.getWidth(), height / photo.getHeight());
+        float scaledWidth = photo.getWidth() * scale;
+        float scaledHeight = photo.getHeight() * scale;
+        float left = (width - scaledWidth) / 2;
+        float top = (height - scaledHeight) / 2;
+        Paint paint = new Paint(Paint.FILTER_BITMAP_FLAG);
+        canvas.drawBitmap(photo, null, new RectF(left, top, left + scaledWidth, top + scaledHeight), paint);
+    }
+
+    static void drawOverlay(Canvas canvas, Discovery.Card card, String topic, float width, float height,
+                            boolean hasPhoto) {
+        float overlayTop = Math.min(width * 1600 / 1080, height * .68f);
+        float textTop = overlayTop + height * .045f;
+        float textBottom = height * (hasPhoto ? .92f : .85f);
+        float scale = Math.min(1f, height / 1900f);
         float margin = 78;
         int textWidth = (int) (width - margin * 2);
-        float contentScale = Math.min(1f, height / 1900f);
-        StaticLayout label = text(topic, 29 * contentScale, LIGHT_GREEN, true, textWidth, 1);
-        StaticLayout title = text(card.title, 64 * contentScale, WHITE, true, textWidth, 2);
-        StaticLayout body = text(card.body, 37 * contentScale, WHITE, false, textWidth, 5);
-        String prompt = card.task.isEmpty() ? ""
-                : "试一试  ·  " + card.task;
-        StaticLayout task = text(prompt, 32 * contentScale, LIGHT_GREEN, false, textWidth, 3);
-        float gap = 26 * contentScale;
-        float total = label.getHeight() + title.getHeight() + body.getHeight() + gap * 2;
-        if (!prompt.isEmpty()) total += gap + task.getHeight();
-        float y = height * .85f - total;
-        y = draw(canvas, label, margin, y) + gap;
-        y = draw(canvas, title, margin, y) + gap;
-        y = draw(canvas, body, margin, y);
-        if (!prompt.isEmpty()) draw(canvas, task, margin, y + gap);
-        return bitmap;
+        TextBlock block = textBlock(card, topic, textWidth, scale);
+        if (hasPhoto && block.height() > textBottom - textTop) {
+            scale *= (textBottom - textTop) / block.height();
+            block = textBlock(card, topic, textWidth, scale);
+        }
+
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        if (hasPhoto) {
+            paint.setShader(new LinearGradient(0, overlayTop, 0, height,
+                    new int[]{0x0009100d, 0xad09100d, 0xb809100d},
+                    new float[]{0, (textTop - overlayTop) / (height - overlayTop), 1},
+                    Shader.TileMode.CLAMP));
+            canvas.drawRect(0, overlayTop, width, height, paint);
+        } else {
+            paint.setShader(new LinearGradient(0, 0, 0, height,
+                    new int[]{0x7108100b, 0x0008100b, 0x2008100b, 0xe50c150e, INK, INK},
+                    new float[]{0, .25f, .44f, .64f, .84f, 1}, Shader.TileMode.CLAMP));
+            canvas.drawRect(0, 0, width, height, paint);
+        }
+
+        float y = textBottom - block.height();
+        if (hasPhoto) y = Math.max(y, textTop);
+        y = draw(canvas, block.label(), margin, y) + block.gap();
+        y = draw(canvas, block.title(), margin, y) + block.gap();
+        y = draw(canvas, block.body(), margin, y);
+        if (block.task() != null) draw(canvas, block.task(), margin, y + block.gap());
+    }
+
+    private record TextBlock(StaticLayout label, StaticLayout title, StaticLayout body, StaticLayout task,
+                             float gap) {
+        float height() {
+            return label.getHeight() + title.getHeight() + body.getHeight() + gap * 2
+                    + (task == null ? 0 : task.getHeight() + gap);
+        }
+    }
+
+    private static TextBlock textBlock(Discovery.Card card, String topic, int width, float scale) {
+        StaticLayout label = text(topic, 29 * scale, LIGHT_GREEN, true, width, 1);
+        StaticLayout title = text(card.title, 64 * scale, WHITE, true, width, 2);
+        StaticLayout body = text(card.body, 37 * scale, WHITE, false, width, 5);
+        StaticLayout task = card.task.isEmpty() ? null
+                : text("试一试  ·  " + card.task, 32 * scale, LIGHT_GREEN, false, width, 3);
+        return new TextBlock(label, title, body, task, 26 * scale);
     }
 
     private static StaticLayout text(String value, float size, int color, boolean bold,
@@ -145,16 +192,6 @@ final class WallpaperArt {
             factor *= 2;
         }
         return factor;
-    }
-
-    private static void crop(Canvas canvas, Bitmap photo, Paint paint, float width, float height) {
-        float scale = Math.max(width / photo.getWidth(), height / photo.getHeight());
-        int visibleWidth = Math.min(photo.getWidth(), Math.round(width / scale));
-        int visibleHeight = Math.min(photo.getHeight(), Math.round(height / scale));
-        int x = (photo.getWidth() - visibleWidth) / 2;
-        int y = (photo.getHeight() - visibleHeight) / 3;
-        canvas.drawBitmap(photo, new Rect(x, y, x + visibleWidth, y + visibleHeight),
-                new RectF(0, 0, width, height), paint);
     }
 
     private static void backdrop(Canvas canvas, Paint paint, String palette, float w, float h) {

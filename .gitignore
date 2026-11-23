@@ -4,3 +4,8 @@ build/
 local.properties
 *.iml
 *.orig
+*.apk
+*.aab
+*.keystore
+*.jks
+.DS_Store
