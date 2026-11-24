@@ -1,4 +1,4 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.lockscreen;
 
 import android.app.AlarmManager;
 import android.app.PendingIntent;
@@ -9,6 +9,9 @@ import android.content.Intent;
 import android.os.PowerManager;
 import android.os.SystemClock;
 import android.util.Log;
+
+import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.storage.Store;
 
 import java.io.IOException;
 import java.util.concurrent.ExecutorService;
@@ -22,7 +25,7 @@ public final class RotationAlarm extends BroadcastReceiver {
     private static final ExecutorService DISPATCH = Executors.newSingleThreadExecutor();
     private static long armedDeadline;
 
-    static synchronized boolean sync(Context context, Discovery.State state) {
+    public static synchronized boolean sync(Context context, Discovery.State state) {
         try {
             JobScheduler jobs = context.getSystemService(JobScheduler.class);
             if (jobs.getPendingJob(LEGACY_JOB_ID) != null) jobs.cancel(LEGACY_JOB_ID);

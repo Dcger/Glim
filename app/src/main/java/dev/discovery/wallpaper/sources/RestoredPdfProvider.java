@@ -1,4 +1,4 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.sources;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;
@@ -9,6 +9,8 @@ import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 
+import dev.discovery.wallpaper.agent.AgentShare;
+
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.List;
@@ -16,7 +18,7 @@ import java.util.List;
 public final class RestoredPdfProvider extends ContentProvider {
     private static final String SUFFIX = ".restored-pdfs";
 
-    static Uri forReader(Context context, Uri uri) {
+    public static Uri forReader(Context context, Uri uri) {
         if (!"file".equals(uri.getScheme())) return uri;
         String path = uri.getPath();
         if (path == null) throw new IllegalArgumentException("Missing PDF path");

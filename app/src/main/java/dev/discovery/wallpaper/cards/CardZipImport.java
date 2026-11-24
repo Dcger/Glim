@@ -1,4 +1,4 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.cards;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -7,6 +7,9 @@ import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.net.Uri;
 import android.util.Log;
+
+import dev.discovery.wallpaper.lockscreen.WallpaperDelivery;
+import dev.discovery.wallpaper.storage.Store;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -24,7 +27,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
 
-final class CardZipImport {
+public final class CardZipImport {
     private static final long MIB = 1024L * 1024;
     private static final long MAX_BYTES = 64 * MIB;
     private static final int MAX_ENTRIES = 256;
@@ -231,7 +234,7 @@ final class CardZipImport {
         delete(directory);
     }
 
-    static void releaseUnused(Context app, Uri uri) {
+    public static void releaseUnused(Context app, Uri uri) {
         String path = uri.getPath();
         if (path == null) return;
         try {

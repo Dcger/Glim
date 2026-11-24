@@ -1,7 +1,10 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.storage;
 
 import android.content.Context;
 import android.net.Uri;
+
+import dev.discovery.wallpaper.cards.CardReferenceJson;
+import dev.discovery.wallpaper.model.Discovery;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -14,18 +17,18 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.stream.Collectors;
 
-final class SampleCards {
+public final class SampleCards {
     private static final String MUSIC = "music";
     private static final String LIGHT = "sample-light";
     private static final String ASSET_DIR = "samples/";
     private static final String ASSET_SCHEME = "asset";
 
-    static boolean isBuiltIn(String topicId) {
+    public static boolean isBuiltIn(String topicId) {
         return MUSIC.equals(topicId) || LIGHT.equals(topicId)
                 || "birds".equals(topicId) || "plants".equals(topicId);
     }
 
-    static String assetName(Uri uri) {
+    public static String assetName(Uri uri) {
         String path = uri.getPath();
         if (!ASSET_SCHEME.equals(uri.getScheme()) || path == null
                 || !path.startsWith("/" + ASSET_DIR)) return null;

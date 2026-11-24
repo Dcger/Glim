@@ -1,4 +1,6 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.cards;
+
+import dev.discovery.wallpaper.model.Discovery;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -8,14 +10,14 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 
-final class CardReferenceJson {
-    static final int MAX_CITATIONS = 12;
-    static final int MAX_CONCEPTS = 10;
-    static final int MAX_LOCATOR = 320;
-    static final int MAX_TERM = 80;
-    static final int MAX_EXPLANATION = 900;
+public final class CardReferenceJson {
+    public static final int MAX_CITATIONS = 12;
+    public static final int MAX_CONCEPTS = 10;
+    public static final int MAX_LOCATOR = 320;
+    public static final int MAX_TERM = 80;
+    public static final int MAX_EXPLANATION = 900;
 
-    static Discovery.References read(JSONObject row) throws JSONException {
+    public static Discovery.References read(JSONObject row) throws JSONException {
         List<Discovery.Concept> concepts = new ArrayList<>();
         JSONArray entries = array(row, "concepts", MAX_CONCEPTS);
         for (int i = 0; i < entries.length(); i++) {
@@ -26,7 +28,7 @@ final class CardReferenceJson {
         return new Discovery.References(citations(row), concepts);
     }
 
-    static JSONObject write(JSONObject row, Discovery.References references) throws JSONException {
+    public static JSONObject write(JSONObject row, Discovery.References references) throws JSONException {
         if (!references.citations().isEmpty()) row.put("citations", citationsJson(references.citations()));
         if (!references.concepts().isEmpty()) {
             JSONArray concepts = new JSONArray();
@@ -40,7 +42,7 @@ final class CardReferenceJson {
         return row;
     }
 
-    static List<String> readSourceIds(JSONObject row) throws JSONException {
+    public static List<String> readSourceIds(JSONObject row) throws JSONException {
         JSONArray values = array(row, "sourceIds", Integer.MAX_VALUE);
         LinkedHashSet<String> ids = new LinkedHashSet<>();
         for (int i = 0; i < values.length(); i++) ids.add(requiredText(values.get(i), "sourceIds", 160));

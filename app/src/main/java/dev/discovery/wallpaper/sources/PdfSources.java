@@ -1,4 +1,4 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.sources;
 
 import android.content.Context;
 import android.content.Intent;
@@ -8,6 +8,11 @@ import android.graphics.pdf.PdfRenderer;
 import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
+
+import dev.discovery.wallpaper.agent.AgentShare;
+import dev.discovery.wallpaper.lockscreen.WallpaperDelivery;
+import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.storage.Store;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -19,7 +24,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-final class PdfSources {
+public final class PdfSources {
     record Result(List<String> addedIds, int duplicates, int failed, String exampleFailure) {}
 
     record Page(Bitmap bitmap, int total) {}
@@ -69,7 +74,7 @@ final class PdfSources {
 
     private record Candidate(String label, String uri) {}
 
-    static String relink(Context app, String topicId, String sourceId, Uri picked) throws IOException {
+    public static String relink(Context app, String topicId, String sourceId, Uri picked) throws IOException {
         String uri = picked.toString();
         Discovery.Topic snapshot = topic(Store.read(app), topicId);
         Discovery.Source before = source(snapshot, sourceId);

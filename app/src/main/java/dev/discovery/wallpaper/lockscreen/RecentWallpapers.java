@@ -1,9 +1,12 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.lockscreen;
 
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
+
+import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.storage.Store;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -12,8 +15,8 @@ import java.io.IOException;
 import java.util.HashSet;
 import java.util.Set;
 
-final class RecentWallpapers {
-    static File directory(Context context) {
+public final class RecentWallpapers {
+    public static File directory(Context context) {
         return new File(context.getFilesDir(), "recent-locks");
     }
 
@@ -35,7 +38,7 @@ final class RecentWallpapers {
         }
     }
 
-    static Bitmap load(Context context, Discovery.LockEntry entry, Discovery.State state) throws IOException {
+    public static Bitmap load(Context context, Discovery.LockEntry entry, Discovery.State state) throws IOException {
         if (!entry.image().isEmpty()) {
             Bitmap bitmap = BitmapFactory.decodeFile(file(context, entry.image()).getPath());
             if (bitmap == null) throw new IOException("无法读取这条锁屏记录的图片");
@@ -46,7 +49,7 @@ final class RecentWallpapers {
         return WallpaperArt.render(context, card, entry.topic(), WallpaperArt.dimensions(context, 1440));
     }
 
-    static Uri prepareExport(Context context, Discovery.LockEntry entry) throws IOException {
+    public static Uri prepareExport(Context context, Discovery.LockEntry entry) throws IOException {
         File output = File.createTempFile("export-lock-", ".png", context.getCacheDir());
         try {
             if (!entry.image().isEmpty()) {
@@ -71,7 +74,7 @@ final class RecentWallpapers {
         }
     }
 
-    static void discardExport(Context context, String value) {
+    public static void discardExport(Context context, String value) {
         Uri uri = Uri.parse(value);
         String name = uri.getLastPathSegment();
         if (!"file".equals(uri.getScheme()) || name == null || !name.startsWith("export-lock-")) return;

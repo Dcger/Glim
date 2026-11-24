@@ -1,4 +1,7 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.cards;
+
+import dev.discovery.wallpaper.agent.AgentShare;
+import dev.discovery.wallpaper.model.Discovery;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

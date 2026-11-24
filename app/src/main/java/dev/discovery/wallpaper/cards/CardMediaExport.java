@@ -1,17 +1,21 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.cards;
 
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.webkit.MimeTypeMap;
 
+import dev.discovery.wallpaper.R;
+import dev.discovery.wallpaper.agent.AgentShare;
+import dev.discovery.wallpaper.storage.SampleCards;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Locale;
 
-final class CardMediaExport {
-    static Intent destination(Context context, String title, String media, boolean image) {
+public final class CardMediaExport {
+    public static Intent destination(Context context, String title, String media, boolean image) {
         String mime = null;
         String extension = "";
         if ("sample".equals(media)) {
@@ -46,12 +50,12 @@ final class CardMediaExport {
                 .putExtra(Intent.EXTRA_TITLE, filename);
     }
 
-    static InputStream open(Context app, Uri uri) throws IOException {
+    public static InputStream open(Context app, Uri uri) throws IOException {
         String asset = SampleCards.assetName(uri);
         return asset == null ? app.getContentResolver().openInputStream(uri) : app.getAssets().open(asset);
     }
 
-    static void copy(Context app, String media, Uri destination) throws IOException {
+    public static void copy(Context app, String media, Uri destination) throws IOException {
         try (InputStream input = "sample".equals(media)
                 ? app.getResources().openRawResource(R.raw.timbre_comparison)
                 : open(app, Uri.parse(media))) {

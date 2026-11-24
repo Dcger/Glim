@@ -1,4 +1,4 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.agent;
 
 import android.content.ClipData;
 import android.content.Context;
@@ -7,6 +7,10 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.OpenableColumns;
+
+import dev.discovery.wallpaper.cards.CardReferenceJson;
+import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.sources.RestoredPdfProvider;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -20,14 +24,14 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 
-final class AgentShare {
-    static final String PDF = "application/pdf";
-    static final int MAX_PROMPT_BYTES = 200_000;
+public final class AgentShare {
+    public static final String PDF = "application/pdf";
+    public static final int MAX_PROMPT_BYTES = 200_000;
 
-    record Target(String label, String packageName) {}
+    public record Target(String label, String packageName) {}
 
-    static final class MissingPdfs extends IOException {
-        final List<Discovery.Source> sources;
+    public static final class MissingPdfs extends IOException {
+        public final List<Discovery.Source> sources;
 
         MissingPdfs(List<Discovery.Source> sources) {
             super("部分 PDF 无法读取。");
@@ -43,7 +47,7 @@ final class AgentShare {
             new Target("Perplexity", "ai.perplexity.app.android")
     };
 
-    static List<Target> targets(Context context, Intent share) {
+    public static List<Target> targets(Context context, Intent share) {
         List<Target> available = new ArrayList<>();
         PackageManager manager = context.getPackageManager();
         for (Target target : AGENTS) {
@@ -55,12 +59,12 @@ final class AgentShare {
         return available;
     }
 
-    static String filename(Context context, Uri uri) {
+    public static String filename(Context context, Uri uri) {
         String name = displayName(context, uri);
         return name.isEmpty() ? "本地 PDF" : name;
     }
 
-    static String displayName(Context context, Uri uri) {
+    public static String displayName(Context context, Uri uri) {
         try (Cursor cursor = context.getContentResolver().query(uri,
                 new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
             if (cursor != null && cursor.moveToFirst() && cursor.getColumnCount() > 0) {
@@ -73,7 +77,7 @@ final class AgentShare {
         return "";
     }
 
-    static String prompt(Discovery.Topic topic, List<Discovery.Source> sources,
+    public static String prompt(Discovery.Topic topic, List<Discovery.Source> sources,
                          boolean includeTopicNotes, String customNotes, List<Discovery.Card> existing,
                          boolean updateExisting, int width, int height) {
         StringBuilder text = new StringBuilder()
@@ -196,7 +200,7 @@ final class AgentShare {
         }
     }
 
-    static Intent intent(Context context, String prompt, List<Discovery.Source> sources) throws IOException {
+    public static Intent intent(Context context, String prompt, List<Discovery.Source> sources) throws IOException {
         ArrayList<Uri> files = checkedPdfs(context, sources);
         boolean multiple = files.size() > 1;
         Intent share = new Intent(multiple ? Intent.ACTION_SEND_MULTIPLE : Intent.ACTION_SEND)

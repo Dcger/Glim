@@ -1,7 +1,11 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.backup;
 
 import android.content.Context;
 import android.net.Uri;
+
+import dev.discovery.wallpaper.lockscreen.RecentWallpapers;
+import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.storage.Store;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -22,7 +26,7 @@ import java.util.regex.Pattern;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
-final class DataRestore {
+public final class DataRestore {
     static final String FORMAT = "glim-data";
     static final int VERSION = 1;
     private static final Pattern ASSET = Pattern.compile("assets/(?:pdf|image|audio)-[0-9]+(?:\\.[a-zA-Z0-9]{1,8})?");
@@ -31,9 +35,9 @@ final class DataRestore {
     private static final int MAX_JSON = 16 * 1024 * 1024;
     private static final long MAX_BYTES = 4L * 1024 * 1024 * 1024;
 
-    record Result(int topics, int cards, int missing) {}
+    public record Result(int topics, int cards, int missing) {}
 
-    static Result read(Context app, Uri uri) throws IOException {
+    public static Result read(Context app, Uri uri) throws IOException {
         try (InputStream input = app.getContentResolver().openInputStream(uri)) {
             if (input == null) throw new IOException("无法读取备份文件。");
             return restore(app, input);

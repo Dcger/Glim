@@ -1,7 +1,10 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.storage;
 
 import android.content.Context;
 import android.util.AtomicFile;
+
+import dev.discovery.wallpaper.cards.CardReferenceJson;
+import dev.discovery.wallpaper.model.Discovery;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -16,12 +19,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-final class Store {
-    interface Edit {
+public final class Store {
+    public interface Edit {
         void apply(Discovery.State state) throws IOException;
     }
 
-    static synchronized Discovery.State read(Context context) throws IOException {
+    public static synchronized Discovery.State read(Context context) throws IOException {
         byte[] bytes;
         try {
             bytes = file(context).readFully();
@@ -35,7 +38,7 @@ final class Store {
         }
     }
 
-    static Discovery.State decode(JSONObject data) throws IOException {
+    public static Discovery.State decode(JSONObject data) throws IOException {
         try {
             Discovery.State state = new Discovery.State();
             JSONArray topics = data.getJSONArray("topics");
@@ -111,13 +114,13 @@ final class Store {
         return ids;
     }
 
-    static synchronized void edit(Context context, Edit edit) throws IOException {
+    public static synchronized void edit(Context context, Edit edit) throws IOException {
         Discovery.State state = read(context);
         edit.apply(state);
         save(context, state);
     }
 
-    static JSONObject snapshot(Discovery.State state) throws IOException {
+    public static JSONObject snapshot(Discovery.State state) throws IOException {
         JSONObject data = new JSONObject();
         try {
             JSONArray topics = new JSONArray();
@@ -163,7 +166,7 @@ final class Store {
         return data;
     }
 
-    static synchronized void save(Context context, Discovery.State state) throws IOException {
+    public static synchronized void save(Context context, Discovery.State state) throws IOException {
         JSONObject data = snapshot(state);
         AtomicFile target = file(context);
         FileOutputStream stream = target.startWrite();

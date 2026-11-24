@@ -1,7 +1,11 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.backup;
 
 import android.content.Context;
 import android.net.Uri;
+
+import dev.discovery.wallpaper.agent.AgentShare;
+import dev.discovery.wallpaper.cards.CardMediaExport;
+import dev.discovery.wallpaper.storage.Store;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -24,10 +28,10 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-final class DataExport {
-    record Result(int topics, int cards, int files, int missing) {}
+public final class DataExport {
+    public record Result(int topics, int cards, int files, int missing) {}
 
-    static Result write(Context app, Uri destination) throws IOException {
+    public static Result write(Context app, Uri destination) throws IOException {
         File prepared = File.createTempFile("glim-export-", ".zip", app.getCacheDir());
         try {
             Result result = writeArchive(app, prepared);

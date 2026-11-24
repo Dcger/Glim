@@ -1,4 +1,4 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.lockscreen;
 
 import android.content.Context;
 import android.graphics.Bitmap;
@@ -24,16 +24,20 @@ import android.util.DisplayMetrics;
 import android.util.Size;
 import android.view.Display;
 
+import dev.discovery.wallpaper.cards.CardMediaExport;
+import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.storage.SampleCards;
+
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 
-final class WallpaperArt {
+public final class WallpaperArt {
     private static final int WHITE = 0xfff5f5ea;
     private static final int INK = 0xff101710;
     private static final int LIGHT_GREEN = 0xffdeefa7;
 
-    static Size dimensions(Context context, int maxWidth) {
+    public static Size dimensions(Context context, int maxWidth) {
         DisplayMetrics metrics = new DisplayMetrics();
         Display display = context.getSystemService(DisplayManager.class).getDisplay(Display.DEFAULT_DISPLAY);
         if (display == null) metrics.setTo(context.getResources().getDisplayMetrics());
@@ -155,7 +159,7 @@ final class WallpaperArt {
         return y + text.getHeight();
     }
 
-    static Bitmap readPhoto(Context context, String value, int width, int height) {
+    public static Bitmap readPhoto(Context context, String value, int width, int height) {
         if (value.isEmpty()) return null;
         Uri uri = Uri.parse(value);
         BitmapFactory.Options options = new BitmapFactory.Options();

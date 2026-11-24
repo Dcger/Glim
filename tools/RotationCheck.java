@@ -1,4 +1,6 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.model;
+
+import dev.discovery.wallpaper.sources.PdfLocator;
 
 import java.util.HashSet;
 import java.util.Arrays;

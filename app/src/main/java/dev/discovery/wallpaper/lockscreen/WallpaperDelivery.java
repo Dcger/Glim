@@ -1,4 +1,4 @@
-package dev.discovery.wallpaper;
+package dev.discovery.wallpaper.lockscreen;
 
 import android.app.WallpaperManager;
 import android.content.Context;
@@ -8,6 +8,9 @@ import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+
+import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.storage.Store;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -20,19 +23,19 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.BooleanSupplier;
 
-final class WallpaperDelivery {
-    static final String TAG = "Glim";
-    static final String CHANGED = "dev.discovery.wallpaper.ROTATION_CHANGED";
+public final class WallpaperDelivery {
+    public static final String TAG = "Glim";
+    public static final String CHANGED = "dev.discovery.wallpaper.ROTATION_CHANGED";
     private static final String APPLIED = "已设为锁屏壁纸";
     private static final ExecutorService QUEUE = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Random RANDOM = new Random();
 
-    interface Finished {
+    public interface Finished {
         void done(String message);
     }
 
-    enum Trigger {
+    public enum Trigger {
         MANUAL, SCHEDULED;
 
         boolean allowed(Discovery.State state) {
@@ -44,12 +47,12 @@ final class WallpaperDelivery {
         context.sendBroadcast(new Intent(CHANGED).setPackage(context.getPackageName()));
     }
 
-    static void run(Context context, Trigger trigger, String requestedCard, BooleanSupplier cancelled,
+    public static void run(Context context, Trigger trigger, String requestedCard, BooleanSupplier cancelled,
                     Finished finished) {
         enqueue(context, trigger, requestedCard, null, cancelled, finished);
     }
 
-    static void reapply(Context context, Discovery.LockEntry entry, Finished finished) {
+    public static void reapply(Context context, Discovery.LockEntry entry, Finished finished) {
         enqueue(context, Trigger.MANUAL, "", entry, () -> false, finished);
     }
 
