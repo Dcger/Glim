@@ -113,7 +113,7 @@ final class DataExport {
             if (written.contains(path)) return true;
             InputStream input;
             try {
-                input = app.getContentResolver().openInputStream(uri);
+                input = CardMediaExport.open(app, uri);
             } catch (IOException | RuntimeException error) {
                 return false;
             }
@@ -136,7 +136,7 @@ final class DataExport {
             if (kind.equals("pdf")) return ".pdf";
             String name;
             try {
-                name = AgentShare.filename(app, uri);
+                name = AgentShare.displayName(app, uri);
             } catch (RuntimeException error) {
                 name = "";
             }

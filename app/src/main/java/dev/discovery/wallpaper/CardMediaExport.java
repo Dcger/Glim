@@ -20,13 +20,14 @@ final class CardMediaExport {
         } else {
             Uri uri = Uri.parse(media);
             MimeTypeMap types = MimeTypeMap.getSingleton();
-            String name = "file".equals(uri.getScheme())
+            boolean bundled = SampleCards.assetName(uri) != null;
+            String name = bundled || "file".equals(uri.getScheme())
                     ? uri.getLastPathSegment() : AgentShare.displayName(context, uri);
             if (name != null && name.lastIndexOf('.') >= 0) {
                 String suffix = name.substring(name.lastIndexOf('.') + 1).toLowerCase(Locale.ROOT);
                 if (suffix.matches("[a-z0-9]{1,10}")) extension = suffix;
             }
-            mime = context.getContentResolver().getType(uri);
+            mime = bundled ? null : context.getContentResolver().getType(uri);
             if (mime == null || "application/octet-stream".equals(mime)) {
                 mime = types.getMimeTypeFromExtension(extension);
             }
@@ -45,10 +46,15 @@ final class CardMediaExport {
                 .putExtra(Intent.EXTRA_TITLE, filename);
     }
 
+    static InputStream open(Context app, Uri uri) throws IOException {
+        String asset = SampleCards.assetName(uri);
+        return asset == null ? app.getContentResolver().openInputStream(uri) : app.getAssets().open(asset);
+    }
+
     static void copy(Context app, String media, Uri destination) throws IOException {
         try (InputStream input = "sample".equals(media)
                 ? app.getResources().openRawResource(R.raw.timbre_comparison)
-                : app.getContentResolver().openInputStream(Uri.parse(media))) {
+                : open(app, Uri.parse(media))) {
             if (input == null) throw new IOException("无法读取卡片媒体。");
             try (OutputStream output = app.getContentResolver().openOutputStream(destination, "wt")) {
                 if (output == null) throw new IOException("无法写入所选位置。");

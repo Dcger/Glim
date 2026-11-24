@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.UUID;
 
 final class PdfSources {
-    record Result(int added, int duplicates, int failed, String exampleFailure) {}
+    record Result(List<String> addedIds, int duplicates, int failed, String exampleFailure) {}
 
     record Page(Bitmap bitmap, int total) {}
 
@@ -102,8 +102,8 @@ final class PdfSources {
         return before.fileUri.equals(uri) ? "" : before.fileUri;
     }
 
-    static String save(Context app, String topicId, String existingId, String label, String url, String uri)
-            throws IOException {
+    static String save(Context app, String topicId, String existingId, String id, String label,
+                       String url, String uri) throws IOException {
         Discovery.Topic snapshot = topic(Store.read(app), topicId);
         Discovery.Source before = source(snapshot, existingId);
         boolean newFile = !uri.isEmpty() && (before == null || !uri.equals(before.fileUri));
@@ -132,8 +132,7 @@ final class PdfSources {
                 }
                 updateHashes(current, hashes);
                 Discovery.Source updated = new Discovery.Source(
-                        previous == null ? UUID.randomUUID().toString() : previous.id,
-                        label, url, uri, fingerprint);
+                        id, label, url, uri, fingerprint);
                 if (position < 0) current.sources.add(updated);
                 else current.sources.set(position, updated);
             });
@@ -148,7 +147,8 @@ final class PdfSources {
         Discovery.Topic snapshot = topic(Store.read(app), topicId);
         Map<String, String> hashes = index(app, snapshot);
         List<Candidate> candidates = new ArrayList<>();
-        int[] counts = new int[3];
+        List<String> added = new ArrayList<>();
+        int[] counts = new int[2];
         String[] failure = {""};
         for (Uri uri : selected) {
             String path = uri.toString();
@@ -157,7 +157,7 @@ final class PdfSources {
                 hash(app, path, hashes);
                 candidates.add(new Candidate(label, path));
             } catch (IOException error) {
-                if (duplicate(snapshot, "", path, "", hashes)) counts[1]++;
+                if (duplicate(snapshot, "", path, "", hashes)) counts[0]++;
                 else failed(counts, failure, label);
             }
         }
@@ -169,14 +169,14 @@ final class PdfSources {
                 for (Candidate pdf : candidates) {
                     String fingerprint = hashes.get(pdf.uri());
                     if (duplicate(current, "", pdf.uri(), fingerprint, hashes)) {
-                        counts[1]++;
+                        counts[0]++;
                         continue;
                     }
                     try {
                         retain(app, pdf.uri(), granted);
-                        current.sources.add(new Discovery.Source(UUID.randomUUID().toString(),
-                                pdf.label(), "", pdf.uri(), fingerprint));
-                        counts[0]++;
+                        String id = UUID.randomUUID().toString();
+                        current.sources.add(new Discovery.Source(id, pdf.label(), "", pdf.uri(), fingerprint));
+                        added.add(id);
                     } catch (IOException error) {
                         failed(counts, failure, pdf.label());
                     }
@@ -186,7 +186,7 @@ final class PdfSources {
             releaseFailed(app, granted);
             throw error;
         }
-        return new Result(counts[0], counts[1], counts[2], failure[0]);
+        return new Result(added, counts[0], counts[1], failure[0]);
     }
 
     private static Discovery.Topic topic(Discovery.State state, String id) throws IOException {
@@ -286,7 +286,7 @@ final class PdfSources {
     }
 
     private static void failed(int[] counts, String[] failure, String label) {
-        counts[2]++;
+        counts[1]++;
         if (failure[0].isEmpty()) failure[0] = label;
     }
 }

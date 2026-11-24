@@ -33,11 +33,10 @@ final class WallpaperDelivery {
     }
 
     enum Trigger {
-        MANUAL, SCHEDULED, TEST;
+        MANUAL, SCHEDULED;
 
         boolean allowed(Discovery.State state) {
-            return this != SCHEDULED
-                    || (state.rotationDue(System.currentTimeMillis()) && !RotationTestService.isActive());
+            return this == MANUAL || state.rotationDue(System.currentTimeMillis());
         }
     }
 

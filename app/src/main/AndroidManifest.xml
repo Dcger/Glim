@@ -1,10 +1,11 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <permission android:name="${applicationId}.permission.ROTATION_CHANGED"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="${applicationId}.permission.ROTATION_CHANGED" />
 
     <queries>
         <package android:name="com.openai.chatgpt" />
@@ -39,13 +40,5 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-        <service
-            android:name=".RotationTestService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Two-minute user-initiated lock screen wallpaper rotation diagnostic" />
-        </service>
     </application>
 </manifest>

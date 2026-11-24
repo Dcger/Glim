@@ -162,22 +162,24 @@ final class WallpaperArt {
         options.inJustDecodeBounds = true;
         try {
             if (Build.VERSION.SDK_INT >= 28) {
-                ImageDecoder.Source source = "file".equals(uri.getScheme())
-                        ? ImageDecoder.createSource(new File(uri.getPath()))
-                        : ImageDecoder.createSource(context.getContentResolver(), uri);
+                String asset = SampleCards.assetName(uri);
+                ImageDecoder.Source source;
+                if (asset != null) source = ImageDecoder.createSource(context.getAssets(), asset);
+                else if ("file".equals(uri.getScheme())) source = ImageDecoder.createSource(new File(uri.getPath()));
+                else source = ImageDecoder.createSource(context.getContentResolver(), uri);
                 return ImageDecoder.decodeBitmap(source, (decoder, info, input) -> {
                     Size original = info.getSize();
                     decoder.setTargetSampleSize(sampleSize(original.getWidth(), original.getHeight(), width, height));
                     decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE);
                 });
             }
-            try (InputStream bounds = context.getContentResolver().openInputStream(uri)) {
+            try (InputStream bounds = CardMediaExport.open(context, uri)) {
                 if (bounds == null) return null;
                 BitmapFactory.decodeStream(bounds, null, options);
             }
             options.inSampleSize = sampleSize(options.outWidth, options.outHeight, width, height);
             options.inJustDecodeBounds = false;
-            try (InputStream source = context.getContentResolver().openInputStream(uri)) {
+            try (InputStream source = CardMediaExport.open(context, uri)) {
                 return source == null ? null : BitmapFactory.decodeStream(source, null, options);
             }
         } catch (IOException | RuntimeException ignored) {

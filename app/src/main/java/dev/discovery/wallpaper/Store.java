@@ -26,7 +26,7 @@ final class Store {
         try {
             bytes = file(context).readFully();
         } catch (FileNotFoundException absent) {
-            return SampleCards.create();
+            return SampleCards.create(context);
         }
         try {
             return decode(new JSONObject(new String(bytes, StandardCharsets.UTF_8)));

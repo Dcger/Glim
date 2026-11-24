@@ -75,7 +75,7 @@ final class AgentShare {
 
     static String prompt(Discovery.Topic topic, List<Discovery.Source> sources,
                          boolean includeTopicNotes, String customNotes, List<Discovery.Card> existing,
-                         int width, int height) {
+                         boolean updateExisting, int width, int height) {
         StringBuilder text = new StringBuilder()
                 .append("为「").append(topic.name).append("」制作适合手机锁屏的发现卡片。")
                 .append("每张写一件能马上观察或尝试的发现，事实以所选资料支持的内容为准。")
@@ -127,28 +127,34 @@ final class AgentShare {
                 text.append("（PDF 附件 ").append(number).append("）");
             }
         }
-        if (!existing.isEmpty()) appendUpdates(text, topic, existing, selectedIds);
+        if (!existing.isEmpty()) appendExisting(text, topic, existing, selectedIds, updateExisting);
         return text.toString();
     }
 
-    private static void appendUpdates(StringBuilder text, Discovery.Topic topic, List<Discovery.Card> existing,
-                                      LinkedHashSet<String> selectedIds) {
-        text.append("\n\n已有卡片与更新规则")
-                .append("\n- 下面的已有卡片用于核对和避免重复。需要更新哪张，就在返回的 cards 中原样填写该卡的 cardId。")
-                .append("每个 cardId 最多写一次。只返回实际要更新的卡片。全新的卡片省略 cardId。")
-                .append("\n- 更新时仍填写完整的 title 和 body。省略 task、image、audio 可保留原值，空字符串会清除相应内容。")
-                .append("如要保留原引用与概念，省略 sourceIds、citations 和 concepts 三项。")
-                .append("如修改其中任一项，请输出完整的新引用和概念数组，把要保留的条目也复制过去。")
-                .append("下方旧引用可以原样保留。新增定位以本次实际查阅的资料为准。")
-                .append("已有卡片的图片和音频以有无标记展示，本次附件只包含所选资料的 PDF。");
+    private static void appendExisting(StringBuilder text, Discovery.Topic topic, List<Discovery.Card> existing,
+                                       LinkedHashSet<String> selectedIds, boolean updateExisting) {
+        if (updateExisting) {
+            text.append("\n\n已有卡片与更新规则")
+                .append("\n- 请同时检查下方选中的卡片并更新需要修改的内容。返回的 cards 中原样填写该卡的 cardId。")
+                    .append("每个 cardId 最多写一次。只返回实际要更新的卡片。全新的卡片省略 cardId。")
+                    .append("\n- 更新时仍填写完整的 title 和 body。省略 task、image、audio 可保留原值，空字符串会清除相应内容。")
+                    .append("如要保留原引用与概念，省略 sourceIds、citations 和 concepts 三项。")
+                    .append("如修改其中任一项，请输出完整的新引用和概念数组，把要保留的条目也复制过去。")
+                    .append("下方旧引用可以原样保留。新增定位以本次实际查阅的资料为准。");
+        } else {
+            text.append("\n\n已有卡片")
+                    .append("\n- 下方卡片仅供写作参考和去重。请生成新卡片，返回的卡片均省略 cardId。");
+        }
+        text.append("\n已有卡片的图片和音频以有无标记展示，本次附件只包含所选资料的 PDF。");
         LinkedHashSet<String> cited = new LinkedHashSet<>();
         JSONArray rows = new JSONArray();
         try {
             for (Discovery.Card card : existing) {
                 cited.addAll(card.sourceIds);
                 cited.addAll(card.references.sourceIds());
-                rows.put(CardReferenceJson.write(new JSONObject().put("cardId", card.id)
-                        .put("title", card.title).put("body", card.body).put("task", card.task)
+                JSONObject row = new JSONObject();
+                if (updateExisting) row.put("cardId", card.id);
+                rows.put(CardReferenceJson.write(row.put("title", card.title).put("body", card.body).put("task", card.task)
                         .put("sourceIds", new JSONArray(card.sourceIds))
                         .put("hasImage", !card.photoUri.isEmpty()).put("hasAudio", !card.audioUri.isEmpty()),
                         card.references));

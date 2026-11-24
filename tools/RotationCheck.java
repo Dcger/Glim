@@ -15,7 +15,7 @@ public final class RotationCheck {
         checkRecentLocks();
         checkRotationDeadline();
         checkPdfPageLocators();
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         require(!state.automatic, "automatic changes require opt-in");
         require(state.minutes == 30, "default interval");
         require(state.topics.size() == 3, "sample topics");
@@ -55,8 +55,25 @@ public final class RotationCheck {
         System.out.println("RotationCheck passed");
     }
 
+    private static Discovery.State fixture() {
+        Discovery.State state = new Discovery.State();
+        for (String[] row : new String[][]{{"birds", "cornell"}, {"plants", "noaa"}, {"music", "unsw"}}) {
+            Discovery.Topic topic = new Discovery.Topic(row[0], row[0], true);
+            topic.sources.add(new Discovery.Source(row[1], row[1], ""));
+            state.topics.put(topic.id, topic);
+        }
+        for (String[] row : new String[][]{
+                {"drum", "birds"}, {"yellow", "plants"}, {"timbre", "music"}, {"rhythm", "birds"}}) {
+            Discovery.Topic topic = state.topics.get(row[1]);
+            Discovery.Card card = new Discovery.Card(row[0], topic.id, row[0], "Body",
+                    "", topic.sources.get(0).id, "", "", "forest");
+            state.cards.put(card.id, card);
+        }
+        return state;
+    }
+
     private static void checkRotationDeadline() {
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         long entered = 1_000_000L;
         state.configureRotation(true, 15, entered);
         long due = entered + 900_000L;
@@ -77,7 +94,7 @@ public final class RotationCheck {
     }
 
     private static void checkShuffle() {
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         state.randomRotation = true;
         Random rng = new Random(42);
         boolean differsFromOrder = false;
@@ -100,7 +117,7 @@ public final class RotationCheck {
     }
 
     private static void checkRecentLocks() {
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         Discovery.Card card = state.cards.get("drum");
         state.lastCardId = card.id;
         state.lastAppliedAt = 1000;
@@ -121,7 +138,7 @@ public final class RotationCheck {
     }
 
     private static void checkIndependentModesAndCardEnablement() {
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         state.lastCardId = "drum";
         state.randomBrowse = true;
         Set<String> previews = new HashSet<>();
@@ -157,7 +174,7 @@ public final class RotationCheck {
     }
 
     private static void checkCardRemoval() {
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         Discovery.Card drum = state.cards.get("drum");
         state.applied(lock(state, drum, 2000), false);
         Discovery.Card edited = new Discovery.Card(drum.id, drum.topicId, "Edited", drum.body,
@@ -173,7 +190,7 @@ public final class RotationCheck {
     }
 
     private static void checkTopicRemoval() {
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         Discovery.Card bird = state.cards.get("drum");
         String shared = "content://test/pdf";
         state.topics.get("birds").sources.add(new Discovery.Source("bird-pdf", "PDF", "", shared));
@@ -200,7 +217,7 @@ public final class RotationCheck {
     }
 
     private static void checkSourceRemoval() {
-        Discovery.State state = SampleCards.create();
+        Discovery.State state = fixture();
         Discovery.Card original = state.cards.get("drum");
         state.topics.get("birds").sources.add(new Discovery.Source("chosen", "Chosen", ""));
         state.topics.get("birds").sources.add(new Discovery.Source("keep", "Keep", ""));

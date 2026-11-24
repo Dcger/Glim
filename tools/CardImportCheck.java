@@ -112,7 +112,7 @@ public final class CardImportCheck {
     }
 
     private static void checkPrompt(Discovery.Topic topic, List<String> batch) throws IOException {
-        String prompt = AgentShare.prompt(topic, topic.sources, false, "", List.of(), 1080, 2400);
+        String prompt = AgentShare.prompt(topic, topic.sources, false, "", List.of(), false, 1080, 2400);
         require(prompt.contains("每项必填 term 和 explanation"), "prompt names the required concept fields");
         require(prompt.contains("引文时写在 locator 内"), "locator retains searchable quotes");
         require(prompt.contains("PDF 第 23 页（从文件第一页起数）"), "prompt describes physical PDF pages");
@@ -129,7 +129,7 @@ public final class CardImportCheck {
         require(prompt.indexOf("优先裁切或拼接") >= 0
                 && prompt.indexOf("再绘制原创示意图") > prompt.indexOf("优先裁切或拼接"),
                 "prompt prioritizes source artwork over original illustrations");
-        String noSources = AgentShare.prompt(topic, List.of(), false, "", List.of(), 1080, 2400);
+        String noSources = AgentShare.prompt(topic, List.of(), false, "", List.of(), false, 1080, 2400);
         require(noSources.contains("每项必填 term 和 explanation"), "schema stays visible without sources");
         CardImport.Draft withoutSource = parsePromptExample(noSources);
         require(withoutSource.relatedSources(batch).isEmpty() && !withoutSource.inheritsSources(),
@@ -148,9 +148,14 @@ public final class CardImportCheck {
         state.cards.put(original.id, original);
         state.setCardEnabled(original.id, false);
         state.lastShown.put(original.id, 5L);
-        String prompt = AgentShare.prompt(topic, List.of(topic.source("a")), false, "", List.of(original), 1080, 2400);
+        String prompt = AgentShare.prompt(topic, List.of(topic.source("a")), false, "", List.of(original), true, 1080, 2400);
         require(prompt.contains("\"cardId\":\"stable-card\"") && prompt.contains("Chapter VIII")
                 && prompt.contains("原卡引用的其他资料（本次未附文件）"), "prompt includes selected card context and old IDs");
+
+        String referenceOnly = AgentShare.prompt(topic, List.of(), false, "", List.of(original), false, 1080, 2400);
+        require(referenceOnly.contains("仅供写作参考和去重") && referenceOnly.contains("Existing")
+                && !referenceOnly.contains("stable-card") && !referenceOnly.contains("已有卡片与更新规则"),
+                "reference-only prompts omit update rules and stable card IDs");
 
         String text = """
                 {"cards":[{"cardId":"stable-card","title":"Edited","body":"After"}]}
