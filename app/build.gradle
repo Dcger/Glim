@@ -1,11 +1,14 @@
 plugins {
     id 'com.android.application' version '8.9.2'
 }
-
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
 android {
     namespace 'dev.discovery.wallpaper'
     compileSdk 35
-
     defaultConfig {
         applicationId 'dev.discovery.wallpaper'
         minSdk 24
@@ -13,9 +16,25 @@ android {
         versionCode 23
         versionName '0.2.20'
     }
-
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+    signingConfigs {
+        release {
+            def storePath = localProps.getProperty('RELEASE_STORE_FILE')
+            if (storePath) {
+                storeFile = file(storePath)
+                storePassword = localProps.getProperty('RELEASE_STORE_PASSWORD')
+                keyAlias = localProps.getProperty('RELEASE_KEY_ALIAS')
+                keyPassword = localProps.getProperty('RELEASE_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            signingConfig = signingConfigs.release
+            minifyEnabled false
+        }
     }
 }
