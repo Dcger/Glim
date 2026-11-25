@@ -20,9 +20,8 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.Switch;
-import android.widget.TextView;
 
+import dev.discovery.wallpaper.R;
 import dev.discovery.wallpaper.model.Discovery;
 import dev.discovery.wallpaper.sources.PdfLocator;
 import dev.discovery.wallpaper.storage.Store;
@@ -58,7 +57,8 @@ public final class DiscoveryScreen {
     private LinearLayout cardDetails;
     private Button nextCard;
     private Button applyCard;
-    private TextView rotationStatus;
+    private Button observeCard;
+    private Button favoriteCard;
     private Future<?> previewTask;
 
     private final MainActivity activity;
@@ -84,7 +84,6 @@ public final class DiscoveryScreen {
 
     public void clearViews() {
         previewView = null;
-        rotationStatus = null;
     }
 
     public void selectPreview(String id, boolean allowInactive) {
@@ -94,6 +93,10 @@ public final class DiscoveryScreen {
 
     public void resetPreview() {
         selectPreview("", false);
+        shuffledPreviews.clear();
+    }
+
+    public void browseModeChanged() {
         shuffledPreviews.clear();
     }
 
@@ -116,48 +119,13 @@ public final class DiscoveryScreen {
             boolean empty = activity.state().topics.isEmpty();
             boolean anyEnabled = activity.state().topics.values().stream().anyMatch(topic -> topic.enabled);
             ui.gapText(box, empty ? "还没有主题" : "当前没有已启用的卡片", 18, TEXT, true, 0);
-            String hint = empty ? "请先添加一个你感兴趣的主题。"
-                    : anyEnabled ? "请在主题的「管理卡片」中启用卡片。还没有卡片的主题可以先添加卡片。"
-                    : "请先启用一个主题，再在「管理卡片」中启用卡片。";
-            ui.gapText(box, hint, 14, MUTED, false, 8);
-            ui.top(box, ui.button(empty ? "添加主题" : "打开主题与资料", () -> activity.changeTab(true), true), 10);
-            ui.top(content, browseModeButton(), 8);
-        }
-
-
-        LinearLayout settings = ui.panel(content, 18);
-        Switch automatic = ui.toggle("自动更换锁屏", activity.state().automatic);
-        settings.addView(automatic);
-        automatic.setOnCheckedChangeListener((control, enabled) -> {
-            if (activity.commit(value -> value.configureRotation(enabled, value.minutes, System.currentTimeMillis()))) activity.refresh(true);
-            else {
-                control.setOnCheckedChangeListener(null);
-                control.setChecked(!enabled);
-                activity.refresh(true);
+            if (!empty) {
+                String hint = anyEnabled ? "请在主题的「管理卡片」中启用卡片。还没有卡片的主题可以先添加卡片。"
+                        : "请先启用一个主题，再在「管理卡片」中启用卡片。";
+                ui.gapText(box, hint, 14, MUTED, false, 8);
             }
-        });
-        ui.top(settings, ui.button("轮换间隔 · " + activity.state().minutes + " 分钟", this::interval, false), 8);
-        ui.top(settings, ui.button("锁屏轮换方式 · " + modeName(activity.state().randomRotation), () -> chooseMode(false), false), 8);
-        if (activity.state().automatic) {
-            ui.gapText(settings, activity.scheduleOk() ? "省电时换图可能延后。若在最近任务清理 App 后停止，重新打开即可恢复排程。"
-                    : "系统拒绝了排程。可关闭自动更换后再开启。", 13, MUTED, false, 8);
+            ui.top(box, ui.navigationButton("主题", R.drawable.ic_tab_topics, activity::openTopics, true), 10);
         }
-        rotationStatus = ui.gapText(settings, "", 13, ACCENT, false, 8);
-        showRotationStatus(activity.state());
-    }
-
-    public void updateRotationStatus() {
-        if (rotationStatus == null) return;
-        try {
-            showRotationStatus(Store.read(activity));
-        } catch (IOException error) {
-            Log.w(WallpaperDelivery.TAG, "Could not read rotation status", error);
-        }
-    }
-
-    private void showRotationStatus(Discovery.State latest) {
-        rotationStatus.setVisibility(latest.status.isEmpty() ? View.GONE : View.VISIBLE);
-        rotationStatus.setText(latest.status);
     }
 
     private void showCard(LinearLayout content, Discovery.Card card) {
@@ -194,13 +162,14 @@ public final class DiscoveryScreen {
             if (selected != null) apply(selected);
         }, true);
         ui.equal(actions, applyCard, 8);
-        ui.top(content, browseModeButton(), 8);
+        LinearLayout statusActions = ui.row();
+        ui.top(content, statusActions, 8);
+        observeCard = ui.button("", () -> activity.toggleObserved(previewId), false);
+        favoriteCard = ui.button("", () -> activity.toggleFavorite(previewId), false);
+        ui.equal(statusActions, observeCard, 0);
+        ui.equal(statusActions, favoriteCard, 8);
         cardDetails = ui.panel(content, 10);
         bindCard(card, size);
-    }
-
-    private Button browseModeButton() {
-        return ui.button("发现浏览顺序 · " + modeName(activity.state().randomBrowse), () -> chooseMode(true), false);
     }
 
     private void bindCard(Discovery.Card card, Size size) {
@@ -210,7 +179,15 @@ public final class DiscoveryScreen {
         LinearLayout details = cardDetails;
         details.removeAllViews();
         ui.gapText(details, topic.name, 13, ACCENT, true, 0);
-        ui.gapText(details, card.title, 22, TEXT, true, 6);
+        boolean observed = activity.state().observed(card.id);
+        boolean favorite = activity.state().favorite(card.id);
+        observeCard.setText(observed ? "取消已观察" : "我观察到了！");
+        observeCard.setSelected(observed);
+        observeCard.setTextColor(observed ? Ui.OBSERVED : TEXT);
+        favoriteCard.setText(favorite ? "取消收藏" : "收藏");
+        favoriteCard.setSelected(favorite);
+        favoriteCard.setTextColor(favorite ? ACCENT : TEXT);
+        ui.gapText(details, card.title, 22, observed ? Ui.OBSERVED : TEXT, true, 6);
         ui.gapText(details, card.body, 15, TEXT, false, 8);
         if (!card.task.isEmpty()) ui.gapText(details, "试一试 · " + card.task, 14, ACCENT, false, 10);
         showReferences(details, topic, card);
@@ -365,36 +342,6 @@ public final class DiscoveryScreen {
         });
     }
 
-    private static String modeName(boolean random) {
-        return random ? "随机" : "顺序";
-    }
-
-    private void chooseMode(boolean browse) {
-        boolean current = browse ? activity.state().randomBrowse : activity.state().randomRotation;
-        new AlertDialog.Builder(activity).setTitle(browse ? "发现浏览顺序" : "锁屏轮换方式")
-                .setSingleChoiceItems(new String[]{"顺序", "随机"}, current ? 1 : 0,
-                        (dialog, index) -> {
-                            boolean random = index == 1;
-                            if (random == current) {
-                                dialog.dismiss();
-                                return;
-                            }
-                            if (activity.commit(latest -> {
-                                if (browse) {
-                                    latest.randomBrowse = random;
-                                } else {
-                                    latest.randomRotation = random;
-                                    latest.shuffledLocks.clear();
-                                }
-                            })) {
-                                if (browse) shuffledPreviews.clear();
-                                dialog.dismiss();
-                                activity.refresh(true);
-                            }
-                        })
-                .setNegativeButton("取消", null).show();
-    }
-
     private void recentLocks() {
         try {
             List<Discovery.LockEntry> history = Store.read(activity).recentLocks;
@@ -467,22 +414,5 @@ public final class DiscoveryScreen {
         } catch (IOException error) {
             ui.notice("无法读取卡片");
         }
-    }
-
-    private void interval() {
-        String[] items = new String[Discovery.INTERVALS.length];
-        int selected = -1;
-        for (int i = 0; i < items.length; i++) {
-            items[i] = Discovery.INTERVALS[i] + " 分钟";
-            if (Discovery.INTERVALS[i] == activity.state().minutes) selected = i;
-        }
-        new AlertDialog.Builder(activity).setTitle("轮换间隔")
-                .setSingleChoiceItems(items, selected, (dialog, index) -> {
-                    if (activity.commit(value -> value.configureRotation(value.automatic, Discovery.INTERVALS[index],
-                            System.currentTimeMillis()))) {
-                        dialog.dismiss();
-                        activity.refresh(true);
-                    }
-                }).setNegativeButton("取消", null).show();
     }
 }

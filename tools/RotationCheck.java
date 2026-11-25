@@ -14,6 +14,7 @@ public final class RotationCheck {
         checkCardRemoval();
         checkShuffle();
         checkIndependentModesAndCardEnablement();
+        checkCardTracking();
         checkRecentLocks();
         checkRotationDeadline();
         checkPdfPageLocators();
@@ -55,6 +56,30 @@ public final class RotationCheck {
         require(state.next(rng) == null, "no eligible deliveries");
         require(state.browse("timbre") == null, "empty preview");
         System.out.println("RotationCheck passed");
+    }
+
+    private static void checkCardTracking() {
+        Discovery.State state = fixture();
+        String cardId = "drum";
+        require(!state.hasFollowedCards(), "new cards begin unobserved and uncollected");
+        state.setObserved(cardId, true);
+        state.setFavorite(cardId, true);
+        require(state.hasFollowedCards() && state.observed(cardId) && state.favorite(cardId),
+                "observed and favorite are independent");
+        require(state.next(new Random(1)).id.equals(cardId),
+                "observed cards still participate in lock-screen rotation");
+        state.setCardEnabled(cardId, false);
+        require(state.eligible(cardId) == null && state.hasFollowedCards(),
+                "disabling rotation keeps the tracking marks");
+        state.setObserved(cardId, false);
+        require(!state.observed(cardId) && state.favorite(cardId), "undoing observation retains favorite");
+        state.setFavorite(cardId, false);
+        require(!state.hasFollowedCards(), "undoing both marks removes the card from following");
+        state.setObserved(cardId, true);
+        state.setFavorite(cardId, true);
+        state.removeCards("birds", Set.of(cardId));
+        state.setObserved(cardId, true);
+        require(!state.hasFollowedCards(), "deleted cards leave no tracking data or orphan marks");
     }
 
     private static Discovery.State fixture() {

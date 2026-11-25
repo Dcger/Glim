@@ -295,7 +295,12 @@ public final class CardsScreen {
                     title.setMaxLines(2);
                     title.setEllipsize(TextUtils.TruncateAt.END);
                     line.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
-                    line.setTag(new CardRow(check, title, mediaTag(line, "图"), mediaTag(line, "音")));
+                    TextView image = mediaTag(line, "图");
+                    TextView audio = mediaTag(line, "音");
+                    TextView observed = mediaTag(line, "观");
+                    observed.setTextColor(Ui.OBSERVED);
+                    observed.setContentDescription("已观察");
+                    line.setTag(new CardRow(check, title, image, audio, observed));
                     convertView = line;
                 }
                 CardRow views = (CardRow) convertView.getTag();
@@ -306,6 +311,9 @@ public final class CardsScreen {
                 check.setContentDescription(action.get() + " · " + card.title);
                 check.setOnCheckedChangeListener((view, checked) -> change.accept(card, checked));
                 views.title().setText(card.title);
+                boolean observed = activity.state().observed(card.id);
+                views.title().setTextColor(observed ? Ui.OBSERVED : TEXT);
+                views.observed().setVisibility(observed ? View.VISIBLE : View.GONE);
                 boolean picture = !card.photoUri.isEmpty();
                 views.image().setTextColor(picture ? MEDIA_IMAGE : MEDIA_INACTIVE);
                 views.image().setContentDescription(picture ? "有配图" : "无配图");
@@ -317,7 +325,7 @@ public final class CardsScreen {
         };
     }
 
-    record CardRow(CheckBox check, TextView title, TextView image, TextView audio) {}
+    record CardRow(CheckBox check, TextView title, TextView image, TextView audio, TextView observed) {}
 
     private TextView mediaTag(LinearLayout row, String value) {
         TextView label = new TextView(activity);

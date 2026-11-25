@@ -150,6 +150,8 @@ public final class CardImportCheck {
                 List.of("b"), "file:///old.png", "content://audio/1", "night", refs);
         state.cards.put(original.id, original);
         state.setCardEnabled(original.id, false);
+        state.setObserved(original.id, true);
+        state.setFavorite(original.id, true);
         state.lastShown.put(original.id, 5L);
         String prompt = AgentShare.prompt(topic, List.of(topic.source("a")), false, "", List.of(original), true, 1080, 2400);
         require(prompt.contains("\"cardId\":\"stable-card\"") && prompt.contains("Chapter VIII")
@@ -172,6 +174,7 @@ public final class CardImportCheck {
                 "updates stable ID instead of adding a card");
         require(!state.cardEnabled(saved.id) && state.lastShown.get(saved.id) == 5L,
                 "preserves enablement and wallpaper history");
+        require(state.observed(saved.id) && state.favorite(saved.id), "updates preserve tracking marks");
         require(saved.references.equals(refs) && saved.sourceIds.equals(List.of("b"))
                 && saved.audioUri.equals(original.audioUri) && saved.photoUri.equals(original.photoUri)
                 && saved.task.equals(original.task)

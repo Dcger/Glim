@@ -4,6 +4,7 @@ import android.app.AlertDialog;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.text.InputFilter;
@@ -27,6 +28,7 @@ public final class Ui {
     public static final int ACCENT = 0xffd5ee92;
     public static final int TEXT = 0xfff4f5eb;
     public static final int MUTED = 0xffb5c3b3;
+    public static final int OBSERVED = 0xffffd47c;
     public static final int DELETE_ACCENT = 0xffffb5aa;
     public static final String TOPIC_NOTES_HINT =
             "（可选）描述任何和主题相关的补充信息，如知识了解程度、本地周围生态、个人兴趣等";
@@ -48,6 +50,21 @@ public final class Ui {
         hint.setGravity(Gravity.CENTER);
         hint.setPadding(dp(8), dp(6), dp(8), dp(6));
         hint.setBackground(rounded(PREVIEW, 10));
+    }
+
+    void guideToTab(LinearLayout header, String message, int tab, int count) {
+        LinearLayout arrows = row();
+        top(header, arrows, 0);
+        for (int i = 0; i < count; i++) {
+            TextView arrow = new TextView(activity);
+            if (i == tab) arrow.setText("↑");
+            arrow.setTextSize(18);
+            arrow.setTextColor(ACCENT);
+            arrow.setGravity(Gravity.CENTER);
+            equal(arrows, arrow, i == 0 ? 0 : 6);
+        }
+        TextView hint = gapText(header, message, 13, ACCENT, false, 0);
+        hint.setGravity(Gravity.CENTER);
     }
 
     public AlertDialog dialog(String title, LinearLayout fields) {
@@ -100,6 +117,11 @@ public final class Ui {
         return UUID.randomUUID().toString();
     }
 
+    public static String cardStatusText(boolean observed, boolean favorite) {
+        if (observed) return favorite ? "已观察 · 已收藏" : "已观察";
+        return favorite ? "已收藏" : "";
+    }
+
     public LinearLayout panel(LinearLayout parent, int margin) {
         LinearLayout box = column();
         box.setBackground(rounded(PANEL, 20));
@@ -121,6 +143,18 @@ public final class Ui {
 
     public Button button(String label, Runnable action, boolean primary) {
         return button(label, action, primary ? ACCENT : PREVIEW, primary ? BACKGROUND : TEXT);
+    }
+
+    public Button navigationButton(String label, int iconResource, Runnable action, boolean active) {
+        Button button = button(label, action, active);
+        Drawable icon = activity.getDrawable(iconResource).mutate();
+        icon.setTint(active ? BACKGROUND : TEXT);
+        icon.setBounds(0, 0, dp(18), dp(18));
+        button.setCompoundDrawables(null, icon, null, null);
+        button.setCompoundDrawablePadding(dp(3));
+        button.setPadding(dp(3), dp(5), dp(3), dp(5));
+        button.setSelected(active);
+        return button;
     }
 
     public Button cardAction(String label, int ink, Runnable action) {

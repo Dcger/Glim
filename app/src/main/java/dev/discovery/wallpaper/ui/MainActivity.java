@@ -22,11 +22,13 @@ import dev.discovery.wallpaper.R;
 import dev.discovery.wallpaper.backup.TransferScreen;
 import dev.discovery.wallpaper.cards.CardZipImport;
 import dev.discovery.wallpaper.cards.CardsScreen;
+import dev.discovery.wallpaper.cards.FollowingScreen;
 import dev.discovery.wallpaper.cards.ImportScreen;
 import dev.discovery.wallpaper.lockscreen.DiscoveryScreen;
 import dev.discovery.wallpaper.lockscreen.RotationAlarm;
 import dev.discovery.wallpaper.lockscreen.WallpaperDelivery;
 import dev.discovery.wallpaper.model.Discovery;
+import dev.discovery.wallpaper.settings.SettingsScreen;
 import dev.discovery.wallpaper.sources.SourcesScreen;
 import dev.discovery.wallpaper.storage.Store;
 import dev.discovery.wallpaper.topics.TopicsScreen;
@@ -45,17 +47,33 @@ public final class MainActivity extends Activity {
     public static final int PICK_RELINK_PDF = 8;
     public static final int SAVE_DATA_EXPORT = 9;
     public static final int PICK_DATA_BACKUP = 10;
+    private enum Tab {
+        DISCOVERY("发现", R.drawable.ic_tab_discovery),
+        TOPICS("主题", R.drawable.ic_tab_topics),
+        FOLLOWING("关注", R.drawable.ic_tab_following),
+        SETTINGS("设置", R.drawable.ic_tab_settings);
+
+        final String label;
+        final int icon;
+
+        Tab(String label, int icon) {
+            this.label = label;
+            this.icon = icon;
+        }
+    }
+
+    private LinearLayout header;
     private LinearLayout content;
     private ScrollView scroll;
     private Discovery.State state;
-    private boolean showTopics;
+    private Tab tab = Tab.DISCOVERY;
     private boolean scheduleOk;
     private final ExecutorService previewWorker = Executors.newSingleThreadExecutor();
     private final ExecutorService ioWorker = Executors.newSingleThreadExecutor();
     private final BroadcastReceiver rotationUpdates = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            discovery.updateRotationStatus();
+            settings.updateRotationStatus();
         }
     };
 
@@ -64,6 +82,8 @@ public final class MainActivity extends Activity {
     public final TopicsScreen topics = new TopicsScreen(this, ui);
     public final SourcesScreen sources = new SourcesScreen(this, ui);
     public final CardsScreen cards = new CardsScreen(this, ui);
+    private final FollowingScreen following = new FollowingScreen(this, ui);
+    private final SettingsScreen settings = new SettingsScreen(this, ui);
     public final ImportScreen imports = new ImportScreen(this, ui);
     public final TransferScreen transfer = new TransferScreen(this, ui);
 
@@ -71,8 +91,10 @@ public final class MainActivity extends Activity {
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
         if (saved != null) {
-            showTopics = saved.getBoolean("topics");
+            int selected = saved.getInt("tab", saved.getBoolean("topics") ? Tab.TOPICS.ordinal() : 0);
+            tab = Tab.values()[selected];
             discovery.restoreState(saved);
+            following.restoreState(saved);
             cards.restoreState(saved);
             imports.restoreState(saved);
             sources.restoreState(saved);
@@ -93,10 +115,13 @@ public final class MainActivity extends Activity {
         });
         scroll = new ScrollView(this);
         scroll.setFillViewport(true);
+        header = ui.column();
+        header.setPadding(ui.dp(16), ui.dp(12), ui.dp(16), ui.dp(4));
+        root.addView(header);
         content = ui.column();
-        content.setPadding(ui.dp(22), ui.dp(20), ui.dp(22), ui.dp(24));
+        content.setPadding(ui.dp(22), 0, ui.dp(22), ui.dp(24));
         scroll.addView(content);
-        root.addView(scroll, new LinearLayout.LayoutParams(-1, -1));
+        root.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
         setContentView(root);
     }
 
@@ -123,8 +148,9 @@ public final class MainActivity extends Activity {
 
     @Override
     protected void onSaveInstanceState(Bundle out) {
-        out.putBoolean("topics", showTopics);
+        out.putInt("tab", tab.ordinal());
         discovery.saveState(out);
+        following.saveState(out);
         cards.saveState(out);
         imports.saveState(out);
         sources.saveState(out);
@@ -176,7 +202,19 @@ public final class MainActivity extends Activity {
     }
 
     public void selectDiscoveryTab() {
-        showTopics = false;
+        tab = Tab.DISCOVERY;
+    }
+
+    public void openTopics() {
+        changeTab(Tab.TOPICS);
+    }
+
+    public void openCard(String cardId) {
+        if (!state.cards.containsKey(cardId)) return;
+        cards.stopAudio();
+        selectDiscoveryTab();
+        discovery.selectPreview(cardId, true);
+        refresh(false);
     }
 
     public void refresh(boolean keepScroll) {
@@ -189,29 +227,53 @@ public final class MainActivity extends Activity {
             Log.w(WallpaperDelivery.TAG, "Could not load the home screen", error);
         }
         discovery.clearViews();
+        settings.clearViews();
         content.removeAllViews();
-        ui.gapText(content, getString(R.string.app_name), 30, TEXT, true, 0);
+        header.removeAllViews();
+        ui.gapText(header, getString(R.string.app_name), 24, TEXT, true, 0);
         if (state == null) {
             ui.gapText(content, "读取卡片失败。", 16, TEXT, false, 22);
             content.addView(ui.button("重试", () -> refresh(false), true));
             return;
         }
         LinearLayout nav = ui.row();
-        ui.top(content, nav, 16);
-        ui.equal(nav, ui.button("发现卡片", () -> changeTab(false), !showTopics), 0);
-        boolean guide = !showTopics && state.topics.isEmpty();
-        ui.equal(nav, ui.button(guide ? "添加主题与资料" : "主题与资料", () -> changeTab(true), showTopics), 8);
-        if (guide) ui.guideToButton(content, "在这里添加你的主题", true);
-        if (showTopics) topics.render(content, scroll);
-        else discovery.render(content);
+        ui.top(header, nav, 8);
+        for (Tab item : Tab.values()) {
+            ui.equal(nav, ui.navigationButton(item.label, item.icon, () -> changeTab(item), item == tab),
+                    item == Tab.DISCOVERY ? 0 : 6);
+        }
+        if (tab == Tab.DISCOVERY && state.hasFollowedCards() && !state.followingHintDismissed) {
+            ui.guideToTab(header, "在这里查看关注的卡片", Tab.FOLLOWING.ordinal(), Tab.values().length);
+        } else if (tab == Tab.DISCOVERY && state.topics.isEmpty()) {
+            ui.guideToTab(header, "在这里添加你的主题", Tab.TOPICS.ordinal(), Tab.values().length);
+        }
+        switch (tab) {
+            case DISCOVERY -> discovery.render(content);
+            case TOPICS -> topics.render(content, scroll);
+            case FOLLOWING -> following.render(content);
+            case SETTINGS -> settings.render(content);
+        }
         cards.updateManager();
     }
 
-    public void changeTab(boolean topics) {
-        if (showTopics == topics) return;
+    private void changeTab(Tab destination) {
+        if (tab == destination) return;
         cards.stopAudio();
-        showTopics = topics;
+        if (destination == Tab.FOLLOWING && state.hasFollowedCards() && !state.followingHintDismissed) {
+            commit(latest -> latest.followingHintDismissed = true);
+        }
+        tab = destination;
         refresh(false);
+    }
+
+    public void toggleObserved(String cardId) {
+        boolean observed = state.observed(cardId);
+        if (commit(latest -> latest.setObserved(cardId, !observed))) refresh(true);
+    }
+
+    public void toggleFavorite(String cardId) {
+        boolean favorite = state.favorite(cardId);
+        if (commit(latest -> latest.setFavorite(cardId, !favorite))) refresh(true);
     }
 
     public void pick(String mimeType, int request) {

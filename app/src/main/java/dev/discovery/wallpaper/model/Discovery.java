@@ -157,6 +157,9 @@ public final class Discovery {
         public final List<LockEntry> recentLocks = new ArrayList<>();
         public final Set<String> shuffledLocks = new LinkedHashSet<>();
         public final Set<String> disabledCards = new LinkedHashSet<>();
+        private final Set<String> observedCards = new LinkedHashSet<>();
+        private final Set<String> favoriteCards = new LinkedHashSet<>();
+        public boolean followingHintDismissed;
         public String lastCardId = "";
         public long lastAppliedAt;
         public long nextRotationAt;
@@ -175,6 +178,31 @@ public final class Discovery {
 
         public boolean cardEnabled(String cardId) {
             return !disabledCards.contains(cardId);
+        }
+
+        public boolean observed(String cardId) {
+            return observedCards.contains(cardId);
+        }
+
+        public boolean favorite(String cardId) {
+            return favoriteCards.contains(cardId);
+        }
+
+        public boolean hasFollowedCards() {
+            return !observedCards.isEmpty() || !favoriteCards.isEmpty();
+        }
+
+        public void setObserved(String cardId, boolean value) {
+            setCardStatus(observedCards, cardId, value);
+        }
+
+        public void setFavorite(String cardId, boolean value) {
+            setCardStatus(favoriteCards, cardId, value);
+        }
+
+        private void setCardStatus(Set<String> status, String cardId, boolean value) {
+            if (!value) status.remove(cardId);
+            else if (cards.containsKey(cardId)) status.add(cardId);
         }
 
         public void setCardEnabled(String cardId, boolean enabled) {
@@ -326,6 +354,8 @@ public final class Discovery {
                 lastShown.remove(card.id);
                 shuffledLocks.remove(card.id);
                 disabledCards.remove(card.id);
+                observedCards.remove(card.id);
+                favoriteCards.remove(card.id);
                 if (card.id.equals(lastCardId)) {
                     lastCardId = "";
                     lastAppliedAt = 0;

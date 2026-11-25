@@ -63,6 +63,8 @@ public final class Store {
                         sourceIds(row), row.optString("photo"), row.optString("audio"),
                         row.optString("palette", "forest"), CardReferenceJson.read(row));
                 state.cards.put(card.id, card);
+                state.setObserved(card.id, row.optBoolean("observed"));
+                state.setFavorite(card.id, row.optBoolean("favorite"));
             }
             JSONObject seen = data.getJSONObject("seen");
             for (java.util.Iterator<String> keys = seen.keys(); keys.hasNext();) {
@@ -78,6 +80,7 @@ public final class Store {
             state.status = data.optString("status");
             state.randomRotation = data.optBoolean("randomRotation");
             state.randomBrowse = data.optBoolean("randomBrowse", state.randomRotation);
+            state.followingHintDismissed = data.optBoolean("followingHintDismissed");
             JSONArray disabled = data.optJSONArray("disabledCards");
             if (disabled != null) {
                 for (int i = 0; i < disabled.length(); i++) state.setCardEnabled(disabled.optString(i), false);
@@ -140,6 +143,7 @@ public final class Store {
                         .put("title", card.title).put("body", card.body).put("task", card.task)
                         .put("sourceIds", new JSONArray(card.sourceIds))
                         .put("photo", card.photoUri).put("audio", card.audioUri)
+                        .put("observed", state.observed(card.id)).put("favorite", state.favorite(card.id))
                         .put("palette", card.palette);
                 cards.put(CardReferenceJson.write(row, card.references));
             }
@@ -155,6 +159,7 @@ public final class Store {
             data.put("topics", topics).put("cards", cards).put("seen", seen)
                     .put("automatic", state.automatic).put("minutes", state.minutes)
                     .put("randomRotation", state.randomRotation).put("randomBrowse", state.randomBrowse)
+                    .put("followingHintDismissed", state.followingHintDismissed)
                     .put("disabledCards", new JSONArray(state.disabledCards))
                     .put("shuffledLocks", new JSONArray(state.shuffledLocks)).put("recentLocks", recent)
                     .put("last", state.lastCardId).put("sequence", state.sequence)
